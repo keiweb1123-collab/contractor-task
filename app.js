@@ -295,24 +295,7 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-function getDeviceRotation() {
-    // Use screen.orientation API (works without permission on all devices)
-    if (screen.orientation && screen.orientation.angle !== undefined) {
-        const angle = screen.orientation.angle;
-        // angle: 0=portrait, 90=landscape-left, 270=landscape-right, 180=upside-down
-        if (angle === 90) return -90;
-        if (angle === 270) return 90;
-        return 0;
-    }
-    // Fallback: window.orientation (older iOS/Android)
-    if (window.orientation !== undefined) {
-        const orient = window.orientation;
-        if (orient === 90) return -90;
-        if (orient === -90) return 90;
-        return 0;
-    }
-    return 0;
-}
+// function getDeviceRotation() removed.
 
 async function startCamera() {
     if (cameraStream) return;
@@ -486,12 +469,12 @@ function capturePhoto() {
     let w = video.videoWidth;
     let h = video.videoHeight;
 
-    // Determine rotation
-    currentRotation = getDeviceRotation();
-    let isRotated = (Math.abs(currentRotation) === 90);
+    // Determine rotation - REMOVED manual rotation
+    // We trust videoWidth/videoHeight to be correct on modern devices/browsers.
+    // If the stream is sideways on some devices, they will need system-level fix or manual rotation button later.
 
-    let targetW = isRotated ? h : w;
-    let targetH = isRotated ? w : h;
+    let targetW = w;
+    let targetH = h;
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -505,13 +488,7 @@ function capturePhoto() {
 
     ctx.save();
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-    if (isRotated) {
-        ctx.translate(targetW / 2, targetH / 2);
-        ctx.rotate(currentRotation * -1 * Math.PI / 180);
-        ctx.drawImage(video, -w / 2, -h / 2, w, h);
-    } else {
-        ctx.drawImage(video, 0, 0, targetW, targetH);
-    }
+    ctx.drawImage(video, 0, 0, targetW, targetH);
     ctx.restore();
     ctx.filter = "none";
 
