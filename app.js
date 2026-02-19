@@ -295,7 +295,21 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-// function getDeviceRotation() removed.
+function getDeviceRotation() {
+    // Try screen.orientation API first
+    if (screen.orientation && screen.orientation.type) {
+        if (screen.orientation.type.startsWith('portrait')) return 0;
+        if (screen.orientation.type === 'landscape-primary') return 90;
+        if (screen.orientation.type === 'landscape-secondary') return -90;
+    }
+    // Fallback to window.orientation (iOS/older)
+    if (typeof window.orientation !== 'undefined') {
+        if (window.orientation === 90) return 90;
+        if (window.orientation === -90) return -90;
+        if (window.orientation === 180) return 180;
+    }
+    return 0;
+}
 
 async function startCamera() {
     if (cameraStream) return;
@@ -469,12 +483,20 @@ function capturePhoto() {
     let w = video.videoWidth;
     let h = video.videoHeight;
 
-    // Determine rotation - REMOVED manual rotation
-    // We trust videoWidth/videoHeight to be correct on modern devices/browsers.
-    // If the stream is sideways on some devices, they will need system-level fix or manual rotation button later.
+    // Get rotation angle
+    const angle = getDeviceRotation();
+    const isLandscape = (angle === 90 || angle === -90);
 
-    let targetW = w;
-    let targetH = h;
+    let targetW, targetH;
+
+    // Determine target dimensions based on rotation
+    if (isLandscape) {
+        targetW = Math.max(w, h);
+        targetH = Math.min(w, h);
+    } else {
+        targetW = Math.min(w, h);
+        targetH = Math.max(w, h);
+    }
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -488,7 +510,19 @@ function capturePhoto() {
 
     ctx.save();
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-    ctx.drawImage(video, 0, 0, targetW, targetH);
+
+    // Apply rotation to straighten image
+    ctx.translate(targetW / 2, targetH / 2);
+    ctx.rotate(angle * -1 * Math.PI / 180);
+
+    // Draw image centered in rotated context
+    if (isLandscape) {
+        // When rotated 90/-90, width/height are swapped in context
+        ctx.drawImage(video, -h / 2, -w / 2, h, w);
+    } else {
+        ctx.drawImage(video, -w / 2, -h / 2, w, h);
+    }
+
     ctx.restore();
     ctx.filter = "none";
 
@@ -496,7 +530,7 @@ function capturePhoto() {
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
     addWatermark(ctx, canvas, selectedUnit, floorText);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+    const dataUrl = canvas.toDataURL("image/jpeg", 9.6); // Slightly better quality
     savePhoto(dataUrl);
     closeCameraOverlay();
 }
@@ -518,35 +552,24 @@ function addWatermark(ctx, canvas, unitText, floorText) {
     const boxWidth = maxW + padding * 2;
     const boxHeight = lines.length * lineHeight + padding * 2 - (lineHeight - fontSize);
 
-    // POSITIONING LOGIC
-    let posX, posY;
-
-    if (canvas.width < canvas.height) {
-        // Portrait -> Top Right
-        posX = canvas.width - margin - boxWidth + padding;
-        posY = margin - padding; // "margin" from top
-    } else {
-        // Landscape -> Top Left
-        posX = margin - padding;
-        posY = margin - padding;
-    }
+    // POSITIONING LOGIC -- ALWAYS TOP LEFT AS REQUESTED
+    const posX = margin - padding; // Left
+    const posY = margin - padding; // Top
 
     ctx.save();
     ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
     ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
     ctx.beginPath();
-    // ctx.roundRect(margin - padding, margin - padding, boxWidth, boxHeight, fontSize * 0.3);
     ctx.roundRect(posX, posY, boxWidth, boxHeight, fontSize * 0.3);
     ctx.fill();
     ctx.restore();
 
     ctx.fillStyle = "white";
+    ctx.font = `bold ${fontSize}px sans-serif`; // Ensure font set
     ctx.shadowColor = "black"; ctx.shadowBlur = 2; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 1;
-    // let yPos = margin + fontSize;
-    // lines.forEach(line => { ctx.fillText(line, margin, yPos); yPos += lineHeight; });
 
     let textX = posX + padding;
-    let textY = posY + padding + fontSize * 0.8; // adjustment for baseline
+    let textY = posY + padding + fontSize * 0.8;
 
     lines.forEach(line => {
         ctx.fillText(line, textX, textY);
