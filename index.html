@@ -102,11 +102,17 @@
 
                     <!-- Bottom Controls -->
                     <div
-                        style="position:absolute; bottom:0; left:0; width:100%; padding:24px; display:flex; justify-content:center; align-items:center; gap:24px; background:linear-gradient(to top, rgba(0,0,0,0.7), transparent); z-index:5010;">
-                        <button onclick="switchCamera()"
+                        style="position:absolute; bottom:0; left:0; width:100%; padding:24px; display:flex; justify-content:center; align-items:center; gap:20px; background:linear-gradient(to top, rgba(0,0,0,0.7), transparent); z-index:5010;">
+
+                        <!-- Front/Back Switch -->
+                        <button onclick="switchCameraFace()"
                             style="background:rgba(255,255,255,0.2); backdrop-filter:blur(5px); border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; border:none; color:white; font-size:20px;">🔄</button>
+
                         <button class="btn-shutter" onclick="capturePhoto()"></button>
-                        <div style="width:50px;"></div> <!-- spacer for centering -->
+
+                        <!-- Wide/Normal Toggle (hidden if not available) -->
+                        <button id="btn-wide-toggle" onclick="toggleWideMode()" class="hidden"
+                            style="background:rgba(255,255,255,0.2); backdrop-filter:blur(5px); border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; border:none; color:white; font-size:14px; font-weight:700;">1x</button>
                     </div>
                 </div>
 
