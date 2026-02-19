@@ -95,10 +95,13 @@
                     <button onclick="closeCameraOverlay()"
                         style="position:absolute; top:16px; left:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:22px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">✕</button>
 
-                    <!-- Orientation Permission Button (iOS) -->
-                    <button id="btn-orientation" onclick="requestOrientationPermission()"
-                        title="Enable auto-rotation for landscape photos"
-                        style="position:absolute; top:16px; right:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:20px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">🔃</button>
+                    <!-- Manual Rotation Button -->
+                    <button id="btn-manual-rotate" onclick="cycleManualRotation()" title="Rotate Image"
+                        style="position:absolute; top:16px; right:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:16px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden;">⟳
+                        0°</button>
+
+                    <!-- Hidden permission button -->
+                    <button id="btn-orientation" onclick="requestOrientationPermission()" class="hidden"></button>
 
                     <!-- Camera Selection Dropdown -->
                     <div style="position:absolute; top:70px; left:16px; z-index:5010;">
@@ -218,7 +221,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=32"></script>
+    <script src="app.js?v=33"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>
