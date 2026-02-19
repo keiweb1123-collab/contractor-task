@@ -292,34 +292,33 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-function handleOrientation(e) {
-    const gamma = e.gamma;
-    if (gamma > 45) currentRotation = -90;
-    else if (gamma < -45) currentRotation = 90;
-    else currentRotation = 0;
-}
-
-function getFinalRotation() {
-    // 1. Try screen API (works if rotation lock is OFF)
-    if (screen.orientation && screen.orientation.angle !== 0 && screen.orientation.angle !== undefined) {
-        if (screen.orientation.angle === 90) return -90;
-        if (screen.orientation.angle === 270) return 90;
+// =============================================================
+// CAMERA
+// =============================================================
+function getDeviceRotation() {
+    // Use screen.orientation API (works without permission on all devices)
+    if (screen.orientation && screen.orientation.angle !== undefined) {
+        const angle = screen.orientation.angle;
+        // angle: 0=portrait, 90=landscape-left, 270=landscape-right, 180=upside-down
+        if (angle === 90) return -90;
+        if (angle === 270) return 90;
+        return 0;
     }
-    if (window.orientation !== 0 && window.orientation !== undefined) {
-        if (window.orientation === 90) return -90;
-        if (window.orientation === -90) return 90;
+    // Fallback: window.orientation (older iOS/Android)
+    if (window.orientation !== undefined) {
+        const orient = window.orientation;
+        if (orient === 90) return -90;
+        if (orient === -90) return 90;
+        return 0;
     }
-    // 2. Fallback to accelerometer (works if rotation lock is ON, needs permission)
-    return currentRotation;
+    return 0;
 }
 
 async function startCamera() {
     if (cameraStream) return;
 
-    // Start orientation listener for Android/Non-iOS immediately
-    if (typeof DeviceOrientationEvent === 'undefined' || typeof DeviceOrientationEvent.requestPermission !== 'function') {
-        window.addEventListener('deviceorientation', handleOrientation);
-    }
+    // Non-iOS: start orientation listener immediately (only if we need it, but screen.orientation handles most)
+    // Removed the global window listener for 'deviceorientation' to rely on system defaults.
 
 
     try {
@@ -373,20 +372,11 @@ async function startCamera() {
 }
 
 async function requestOrientationPermission() {
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try {
-            const response = await DeviceOrientationEvent.requestPermission();
-            if (response === 'granted') {
-                window.addEventListener('deviceorientation', handleOrientation);
-                const btn = document.getElementById('btn-orientation');
-                if (btn) btn.style.display = 'none';
-            } else {
-                alert("傾き検知が許可されませんでした。");
-            }
-        } catch (e) {
-            console.warn("Orientation permission error:", e.message);
-        }
-    }
+    // Only needed if we wanted to listen to DeviceOrientationEvent for other reasons,
+    // but sticking to screen.orientation is safer for now.
+    // Keeping the function to avoid errors if button is clicked.
+    const btn = document.getElementById('btn-orientation');
+    if (btn) btn.style.display = 'none';
 }
 
 function populateCameraSelect() {
@@ -497,8 +487,8 @@ function capturePhoto() {
     let h = video.videoHeight;
 
     // Determine rotation
-    const rotationAngle = getFinalRotation();
-    let isRotated = (Math.abs(rotationAngle) === 90);
+    currentRotation = getDeviceRotation();
+    let isRotated = (Math.abs(currentRotation) === 90);
 
     let targetW = isRotated ? h : w;
     let targetH = isRotated ? w : h;
@@ -517,7 +507,7 @@ function capturePhoto() {
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
     if (isRotated) {
         ctx.translate(targetW / 2, targetH / 2);
-        ctx.rotate(rotationAngle * -1 * Math.PI / 180);
+        ctx.rotate(currentRotation * -1 * Math.PI / 180);
         ctx.drawImage(video, -w / 2, -h / 2, w, h);
     } else {
         ctx.drawImage(video, 0, 0, targetW, targetH);
