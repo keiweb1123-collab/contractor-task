@@ -714,7 +714,9 @@ async function renderPhotoPreview() {
 // =============================================================
 // REPORTS
 // =============================================================
+let _renderGeneration = 0;
 async function renderAllReports() {
+    const thisGen = ++_renderGeneration;
     const container = document.getElementById("reports-container");
     container.innerHTML = "";
     const activeContractors = Object.keys(currentReport);
@@ -726,6 +728,7 @@ async function renderAllReports() {
 
     for (const contractor of activeContractors) {
         const { text, photoData } = await generateContractorReportData(contractor);
+        if (thisGen !== _renderGeneration) return; // newer render started, abort this one
         const card = document.createElement("div");
         card.className = "report-card";
         card.style.borderLeftColor = getContractorColor(contractor);
