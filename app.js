@@ -370,102 +370,93 @@ function updateTaskCount() {
 
 // Camera
 async function startCamera() {
-    // Request Orientation Permission (iOS 13+)
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try {
-            const response = await DeviceOrientationEvent.requestPermission();
-            if (response === 'granted') {
-                window.addEventListener('deviceorientation', handleOrientation);
-            }
-        } catch (e) {
-            console.warn("Orientation permission failed or denied", e);
-        }
-    } else {
+    if (cameraStream) return;
+
+    // On non-iOS, start listening immediately (no permission needed)
+    if (typeof DeviceOrientationEvent === 'undefined' || typeof DeviceOrientationEvent.requestPermission !== 'function') {
         window.addEventListener('deviceorientation', handleOrientation);
     }
 
-    if (cameraStream) return;
-    try {
-        const baseConstraints = {
-            aspectRatio: { ideal: 1.333 },
-            width: { ideal: 2560 },
-            height: { ideal: 1920 }
-        };
+    const baseConstraints = {
+        aspectRatio: { ideal: 1.333 },
+        width: { ideal: 2560 },
+        height: { ideal: 1920 }
+    };
 
-        // Initial launch - try specific device if known, else facingMode
-        let constraints = {
+    // Initial launch - try specific device if known, else facingMode
+    let constraints = {
+        video: {
+            facingMode: { ideal: "environment" },
+            ...baseConstraints
+        },
+        audio: false
+    };
+
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (initialErr) {
+        console.warn("High-res constraints failed, trying basic.", initialErr);
+        // Fallback: Remove resolution constraints, keep facing mode
+        constraints = {
             video: {
-                facingMode: { ideal: "environment" },
-                ...baseConstraints
+                facingMode: "environment"
             },
             audio: false
         };
-
         try {
             cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (initialErr) {
-            console.warn("High-res constraints failed, trying basic.", initialErr);
-            // Fallback: Remove resolution constraints, keep facing mode
-            constraints = {
-                video: {
-                    facingMode: "environment"
-                },
-                audio: false
-            };
-            try {
-                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            } catch (fallbackErr) {
-                // Last resort: Any video
-                console.warn("Environment facing failed, trying any video.", fallbackErr);
-                cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            }
+        } catch (fallbackErr) {
+            // Last resort: Any video
+            console.warn("Environment facing failed, trying any video.", fallbackErr);
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         }
-
-        const video = document.getElementById("camera-stream");
-        video.srcObject = cameraStream;
-
-        // Apply WEAKER HDR (Further reduced by 10%)
-        // New: contrast(1.005) saturate(1.01) brightness(1.002)
-        video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-
-        document.getElementById("camera-overlay").classList.remove("hidden");
-
-        // Enumerate and Identify Cameras
-        if (cameraDevices.length === 0) {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            cameraDevices = devices.filter(d => d.kind === 'videoinput');
-            populateCameraSelect();
-
-            // Identify Normal vs Wide for Back Camera
-            // Usually Back 0 is main, Back 1 is wide? or based on labels.
-            // Let's assume current one is "Normal" if we started with "environment"
-
-            // Find current track settings
-            const track = cameraStream.getVideoTracks()[0];
-            const settings = track.getSettings();
-
-            // Re-scan devices to match current
-            const currentId = settings.deviceId;
-            const currentIdx = cameraDevices.findIndex(d => d.deviceId === currentId);
-            if (currentIdx >= 0) normalCameraIndex = currentIdx;
-
-            // Find Wide Index
-            wideCameraIndex = cameraDevices.findIndex(d =>
-                (/0\.5|ultra|wide/i.test(d.label)) && d.deviceId !== currentId
-            );
-
-            const btnWide = document.getElementById("btn-wide-toggle");
-            if (wideCameraIndex >= 0 && normalCameraIndex >= 0) {
-                btnWide.classList.remove("hidden");
-                btnWide.textContent = "0.5x";
-            } else {
-                btnWide.classList.add("hidden");
-            }
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Camera Error: " + err.message);
     }
+
+    const video = document.getElementById("camera-stream");
+    video.srcObject = cameraStream;
+
+    // Apply WEAKER HDR (Further reduced by 10%)
+    // New: contrast(1.005) saturate(1.01) brightness(1.002)
+    video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
+
+    document.getElementById("camera-overlay").classList.remove("hidden");
+
+    // Enumerate and Identify Cameras
+    if (cameraDevices.length === 0) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        cameraDevices = devices.filter(d => d.kind === 'videoinput');
+        populateCameraSelect();
+
+        // Identify Normal vs Wide for Back Camera
+        // Usually Back 0 is main, Back 1 is wide? or based on labels.
+        // Let's assume current one is "Normal" if we started with "environment"
+
+        // Find current track settings
+        const track = cameraStream.getVideoTracks()[0];
+        const settings = track.getSettings();
+
+        // Re-scan devices to match current
+        const currentId = settings.deviceId;
+        const currentIdx = cameraDevices.findIndex(d => d.deviceId === currentId);
+        if (currentIdx >= 0) normalCameraIndex = currentIdx;
+
+        // Find Wide Index
+        wideCameraIndex = cameraDevices.findIndex(d =>
+            (/0\.5|ultra|wide/i.test(d.label)) && d.deviceId !== currentId
+        );
+
+        const btnWide = document.getElementById("btn-wide-toggle");
+        if (wideCameraIndex >= 0 && normalCameraIndex >= 0) {
+            btnWide.classList.remove("hidden");
+            btnWide.textContent = "0.5x";
+        } else {
+            btnWide.classList.add("hidden");
+        }
+    }
+} catch (err) {
+    console.error(err);
+    alert("Camera Error: " + err.message);
+}
 }
 
 function populateCameraSelect() {
