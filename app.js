@@ -289,27 +289,37 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-function getDeviceRotation() {
-    // Use screen.orientation API (works without permission on all devices)
-    if (screen.orientation && screen.orientation.angle !== undefined) {
-        const angle = screen.orientation.angle;
-        // angle: 0=portrait, 90=landscape-left, 270=landscape-right, 180=upside-down
-        if (angle === 90) return -90;
-        if (angle === 270) return 90;
-        return 0;
+// =============================================================
+// CAMERA
+// =============================================================
+function handleOrientation(e) {
+    const gamma = e.gamma;
+    if (gamma > 45) currentRotation = -90;
+    else if (gamma < -45) currentRotation = 90;
+    else currentRotation = 0;
+}
+
+function getFinalRotation() {
+    // 1. Try screen API (works if rotation lock is OFF)
+    if (screen.orientation && screen.orientation.angle !== 0 && screen.orientation.angle !== undefined) {
+        if (screen.orientation.angle === 90) return -90;
+        if (screen.orientation.angle === 270) return 90;
     }
-    // Fallback: window.orientation (older iOS/Android)
-    if (window.orientation !== undefined) {
-        const orient = window.orientation;
-        if (orient === 90) return -90;
-        if (orient === -90) return 90;
-        return 0;
+    if (window.orientation !== 0 && window.orientation !== undefined) {
+        if (window.orientation === 90) return -90;
+        if (window.orientation === -90) return 90;
     }
-    return 0;
+    // 2. Fallback to accelerometer (works if rotation lock is ON, needs permission)
+    return currentRotation;
 }
 
 async function startCamera() {
     if (cameraStream) return;
+
+    // Start orientation listener for Android/Non-iOS immediately
+    if (typeof DeviceOrientationEvent === 'undefined' || typeof DeviceOrientationEvent.requestPermission !== 'function') {
+        window.addEventListener('deviceorientation', handleOrientation);
+    }
 
 
     try {
@@ -371,7 +381,7 @@ async function requestOrientationPermission() {
                 const btn = document.getElementById('btn-orientation');
                 if (btn) btn.style.display = 'none';
             } else {
-                alert("傾き検知が許可されませんでした。縦向き固定で撮影します。");
+                alert("傾き検知が許可されませんでした。");
             }
         } catch (e) {
             console.warn("Orientation permission error:", e.message);
@@ -485,8 +495,11 @@ function capturePhoto() {
     const maxWidth = 2560;
     let w = video.videoWidth;
     let h = video.videoHeight;
-    currentRotation = getDeviceRotation();
-    let isRotated = (Math.abs(currentRotation) === 90);
+
+    // Determine rotation
+    const rotationAngle = getFinalRotation();
+    let isRotated = (Math.abs(rotationAngle) === 90);
+
     let targetW = isRotated ? h : w;
     let targetH = isRotated ? w : h;
 
@@ -504,7 +517,7 @@ function capturePhoto() {
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
     if (isRotated) {
         ctx.translate(targetW / 2, targetH / 2);
-        ctx.rotate(currentRotation * -1 * Math.PI / 180);
+        ctx.rotate(rotationAngle * -1 * Math.PI / 180);
         ctx.drawImage(video, -w / 2, -h / 2, w, h);
     } else {
         ctx.drawImage(video, 0, 0, targetW, targetH);
@@ -538,18 +551,40 @@ function addWatermark(ctx, canvas, unitText, floorText) {
     const boxWidth = maxW + padding * 2;
     const boxHeight = lines.length * lineHeight + padding * 2 - (lineHeight - fontSize);
 
+    // POSITIONING LOGIC
+    let posX, posY;
+
+    if (canvas.width < canvas.height) {
+        // Portrait -> Top Right
+        posX = canvas.width - margin - boxWidth + padding;
+        posY = margin - padding; // "margin" from top
+    } else {
+        // Landscape -> Top Left
+        posX = margin - padding;
+        posY = margin - padding;
+    }
+
     ctx.save();
     ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
     ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
     ctx.beginPath();
-    ctx.roundRect(margin - padding, margin - padding, boxWidth, boxHeight, fontSize * 0.3);
+    // ctx.roundRect(margin - padding, margin - padding, boxWidth, boxHeight, fontSize * 0.3);
+    ctx.roundRect(posX, posY, boxWidth, boxHeight, fontSize * 0.3);
     ctx.fill();
     ctx.restore();
 
     ctx.fillStyle = "white";
     ctx.shadowColor = "black"; ctx.shadowBlur = 2; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 1;
-    let yPos = margin + fontSize;
-    lines.forEach(line => { ctx.fillText(line, margin, yPos); yPos += lineHeight; });
+    // let yPos = margin + fontSize;
+    // lines.forEach(line => { ctx.fillText(line, margin, yPos); yPos += lineHeight; });
+
+    let textX = posX + padding;
+    let textY = posY + padding + fontSize * 0.8; // adjustment for baseline
+
+    lines.forEach(line => {
+        ctx.fillText(line, textX, textY);
+        textY += lineHeight;
+    });
 }
 
 function selectPhotoFloor(floor) {
