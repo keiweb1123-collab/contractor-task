@@ -402,12 +402,9 @@ async function startCamera() {
             populateCameraSelect(); // Populate dropdown
 
             // Try to find ULTRA wide angle camera (0.5x)
-            // Keywords: "0.5", "ultra", "wide".
-            // Often back camera ID 2 or similar on phones.
-            // We prioritize finding one that isn't the current one.
             const ultraWideIdx = cameraDevices.findIndex(d =>
                 /0\.5|ultra|wide|back 0/i.test(d.label) ||
-                (d.getCapabilities && d.getCapabilities().zoom?.min < 1) // logical check if available
+                (d.getCapabilities && d.getCapabilities().zoom?.min < 1)
             );
 
             if (ultraWideIdx >= 0 && ultraWideIdx !== currentDeviceIndex) {
@@ -426,7 +423,8 @@ async function startCamera() {
                 try {
                     cameraStream = await navigator.mediaDevices.getUserMedia(wideConstraints);
                     video.srcObject = cameraStream;
-                    document.getElementById("camera-select").value = currentDeviceIndex; // Sync dropdown
+                    const sel = document.getElementById("camera-select");
+                    if (sel) sel.value = currentDeviceIndex;
                 } catch (e) { console.error("Ultra wide failed", e); }
             }
         }
@@ -444,6 +442,7 @@ async function startCamera() {
 
 function populateCameraSelect() {
     const select = document.getElementById("camera-select");
+    if (!select) return;
     select.innerHTML = "";
     cameraDevices.forEach((device, index) => {
         const option = document.createElement("option");
