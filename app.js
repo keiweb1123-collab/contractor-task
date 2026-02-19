@@ -731,6 +731,17 @@ async function renderAllReports() {
         return;
     }
 
+    // Sort contractors by specific order: IADECCO, YAMATO, INITI INDAH
+    const priorityOrder = ["IADECCO", "YAMATO", "INITI INDAH"];
+    activeContractors.sort((a, b) => {
+        const idxA = priorityOrder.indexOf(a);
+        const idxB = priorityOrder.indexOf(b);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+        return a.localeCompare(b);
+    });
+
     for (const contractor of activeContractors) {
         const { text, photoData } = await generateContractorReportData(contractor);
         if (thisGen !== _renderGeneration) return; // newer render started, abort this one
