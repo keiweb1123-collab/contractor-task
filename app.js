@@ -49,6 +49,10 @@ let pendingTaskCategory = "";
 // Camera
 let cameraDevices = [];
 let currentDeviceIndex = 0;
+let normalCameraIndex = -1;
+let wideCameraIndex = -1;
+let isWideActive = false;
+let currentFacingMode = "environment";
 
 const STORAGE_KEY = "construction_log_data";
 
@@ -353,158 +357,37 @@ function updateTaskCount() {
 // ---------------------------------------------------------
 // CAMERA
 // ---------------------------------------------------------
+// Camera State (Moved to top of file or already declared)
+// We already declared these at the top:
+// let cameraDevices = [];
+// let currentDeviceIndex = 0;
+// But now we added new ones efficiently.
+// Let's just ensure we don't redeclare them here if they are already at top.
+// The previous edit added them at line 353, but they were ALSO at line 50.
+// I will remove the ONES AT line 353/357 and rely on the ones at the top, 
+// OR consolidate them. 
+
+// Actually, I will just remove the re-declarations I added in the previous step
+// and ensure the new variables (normalCameraIndex, etc) are declared once at the top.
+
+// Wait, I can't see the top right now easily without view_file, but the error says line 50.
+// So I should remove them from line 357.
+
 // Camera
 async function startCamera() {
     if (cameraStream) return;
     try {
-        let constraints;
-
-        // Base constraints for 4:3 aspect ratio (portrait-ish)
-        // High resolution 2560x1920 requested
         const baseConstraints = {
-            aspectRatio: { ideal: 1.333 }, // 4:3
+            aspectRatio: { ideal: 1.333 },
             width: { ideal: 2560 },
             height: { ideal: 1920 }
         };
 
-        if (cameraDevices.length > 0 && cameraDevices[currentDeviceIndex]?.deviceId) {
-            constraints = {
-                video: {
-                    deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
-                    ...baseConstraints
-                },
-                audio: false
-            };
-        } else {
-            constraints = {
-                video: {
-                    facingMode: { ideal: "environment" },
-                    ...baseConstraints
-                },
-                audio: false
-            };
-        }
-
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        const video = document.getElementById("camera-stream");
-        video.srcObject = cameraStream;
-
-        // Apply WEAKER, more natural HDR-like filter
-        // Reduced to very subtle values
-        video.style.filter = "contrast(1.02) saturate(1.05) brightness(1.01)";
-
-        document.getElementById("camera-overlay").classList.remove("hidden");
-
-
-        if (cameraDevices.length === 0) {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            cameraDevices = devices.filter(d => d.kind === 'videoinput');
-            populateCameraSelect(); // Populate dropdown
-
-            // Try to find ULTRA wide angle camera (0.5x)
-            const ultraWideIdx = cameraDevices.findIndex(d =>
-                /0\.5|ultra|wide|back 0/i.test(d.label) ||
-                (d.getCapabilities && d.getCapabilities().zoom?.min < 1)
-            );
-
-            if (ultraWideIdx >= 0 && ultraWideIdx !== currentDeviceIndex) {
-                // Switch to ultra-wide
-                cameraStream.getTracks().forEach(t => t.stop());
-                cameraStream = null;
-                currentDeviceIndex = ultraWideIdx;
-
-                const wideConstraints = {
-                    video: {
-                        deviceId: { exact: cameraDevices[ultraWideIdx].deviceId },
-                        ...baseConstraints
-                    },
-                    audio: false
-                };
-                try {
-                    cameraStream = await navigator.mediaDevices.getUserMedia(wideConstraints);
-                    video.srcObject = cameraStream;
-                    const sel = document.getElementById("camera-select");
-                    if (sel) sel.value = currentDeviceIndex;
-                } catch (e) { console.error("Ultra wide failed", e); }
-            }
-        }
-
-        // ... (zoom logic) ...
-        try {
-            // Zoom logic...
-        } catch (e) { }
-
-    } catch (err) {
-        console.error(err);
-        alert("Camera Error: " + err.message);
-    }
-}
-
-function populateCameraSelect() {
-    const select = document.getElementById("camera-select");
-    if (!select) return;
-    select.innerHTML = "";
-    cameraDevices.forEach((device, index) => {
-        const option = document.createElement("option");
-        option.value = index;
-        option.text = device.label || `Camera ${index + 1}`;
-        select.appendChild(option);
-    });
-    select.value = currentDeviceIndex;
-}
-
-async function manualSelectCamera() {
-    const select = document.getElementById("camera-select");
-    const idx = parseInt(select.value);
-    if (isNaN(idx)) return;
-
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(t => t.stop());
-        cameraStream = null;
-    }
-    currentDeviceIndex = idx;
-
-    const constraints = {
-        video: {
-            deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
-            aspectRatio: { ideal: 1.333 },
-            width: { ideal: 2560 },
-            height: { ideal: 1920 }
-        },
-        audio: false
-    };
-
-    try {
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        const video = document.getElementById("camera-stream");
-        video.srcObject = cameraStream;
-    } catch (err) {
-        alert("Failed to switch: " + err.message);
-    }
-}
-
-async function switchCamera() {
-    if (!cameraStream) return;
-    if (cameraDevices.length < 2) {
-        alert("No other camera found.");
-        return;
-    }
-
-    cameraStream.getTracks().forEach(track => track.stop());
-    cameraStream = null;
-    currentDeviceIndex = (currentDeviceIndex + 1) % cameraDevices.length;
-
-    // Sync Dropdown
-    const select = document.getElementById("camera-select");
-    if (select) select.value = currentDeviceIndex;
-
-    try {
-        const constraints = {
+        // Initial launch - try specific device if known, else facingMode
+        let constraints = {
             video: {
-                deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
-                aspectRatio: { ideal: 1.333 },
-                width: { ideal: 2560 },
-                height: { ideal: 1920 }
+                facingMode: { ideal: "environment" },
+                ...baseConstraints
             },
             audio: false
         };
@@ -512,13 +395,319 @@ async function switchCamera() {
         cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
+
+        // Apply WEAKER HDR (50% of previous)
+        // Previous: contrast(1.02) saturate(1.05) brightness(1.01)
+        // New: contrast(1.01) saturate(1.025) brightness(1.005)
+        video.style.filter = "contrast(1.01) saturate(1.025) brightness(1.005)";
+
+        document.getElementById("camera-overlay").classList.remove("hidden");
+
+        // Enumerate and Identify Cameras
+        if (cameraDevices.length === 0) {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            cameraDevices = devices.filter(d => d.kind === 'videoinput');
+            populateCameraSelect();
+
+            // Identify Normal vs Wide for Back Camera
+            // Usually Back 0 is main, Back 1 is wide? or based on labels.
+            // Let's assume current one is "Normal" if we started with "environment"
+
+            // Find current track settings
+            const track = cameraStream.getVideoTracks()[0];
+            const settings = track.getSettings();
+
+            // Re-scan devices to match current
+            const currentId = settings.deviceId;
+            const currentIdx = cameraDevices.findIndex(d => d.deviceId === currentId);
+            if (currentIdx >= 0) normalCameraIndex = currentIdx;
+
+            // Find Wide Index
+            wideCameraIndex = cameraDevices.findIndex(d =>
+                (/0\.5|ultra|wide/i.test(d.label)) && d.deviceId !== currentId
+            );
+
+            const btnWide = document.getElementById("btn-wide-toggle");
+            if (wideCameraIndex >= 0 && normalCameraIndex >= 0) {
+                btnWide.classList.remove("hidden");
+                btnWide.textContent = "0.5x";
+            } else {
+                btnWide.classList.add("hidden");
+            }
+        }
     } catch (err) {
-        console.error("Switch camera failed:", err);
-        // Try to restart with default
-        cameraStream = null;
-        currentDeviceIndex = 0;
-        await startCamera();
+        console.error(err);
+        alert("Camera Error: " + err.message);
     }
+}
+
+async function switchCameraFace() {
+    if (!cameraStream) return;
+    stopCameraStreamOnly();
+
+    // Toggle facing mode
+    currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
+
+    // If switching to user, hide wide button
+    const btnWide = document.getElementById("btn-wide-toggle");
+    if (currentFacingMode === "user") btnWide.classList.add("hidden");
+
+    // Reset indices check when switching face
+    // For simplicity, just request facingMode and let browser pick
+    try {
+        const constraints = {
+            video: {
+                facingMode: { exact: currentFacingMode },
+                width: { ideal: 2560 },
+                height: { ideal: 1920 },
+                aspectRatio: { ideal: 1.333 }
+            },
+            audio: false
+        };
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const video = document.getElementById("camera-stream");
+        video.srcObject = cameraStream;
+
+        // Re-evaluate wide availability if back
+        if (currentFacingMode === "environment") {
+            // We might need to re-find normal/wide indices if they changed IDs (unlikely but safe)
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            cameraDevices = devices.filter(d => d.kind === 'videoinput');
+            // Attempt to find wide again
+            wideCameraIndex = cameraDevices.findIndex(d => /0\.5|ultra|wide/i.test(d.label));
+            if (wideCameraIndex >= 0) {
+                btnWide.classList.remove("hidden");
+                btnWide.textContent = "0.5x";
+                isWideActive = false;
+            }
+        }
+
+    } catch (err) {
+        // Fallback to ideal if exact fails
+        try {
+            const constraints = {
+                video: {
+                    facingMode: { ideal: currentFacingMode },
+                    width: { ideal: 2560 },
+                    height: { ideal: 1920 },
+                    aspectRatio: { ideal: 1.333 }
+                },
+                audio: false
+            };
+            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const video = document.getElementById("camera-stream");
+            video.srcObject = cameraStream;
+        } catch (e) {
+            alert("Camera Switch Failed: " + e.message);
+        }
+    }
+}
+
+async function toggleWideMode() {
+    if (!cameraStream) return;
+    if (wideCameraIndex === -1) return;
+
+    stopCameraStreamOnly();
+
+    isWideActive = !isWideActive;
+    const targetIdx = isWideActive ? wideCameraIndex : normalCameraIndex;
+    // If normal index invalid, fallback to default logic? 
+    // Actually if we found wide, we must have found normal as "not wide".
+    // If normalCameraIndex IS -1 (unknown), we might just rely on enumerate excluding current wide?
+    // Let's rely on stored IDs.
+
+    let deviceId = cameraDevices[targetIdx]?.deviceId;
+
+    // IF we don't have a specific ID for normal (e.g. first launch), try to find it again
+    if (!deviceId && !isWideActive) {
+        // Just request environment again?
+        // Or find the one that ISN'T wide
+        const normal = cameraDevices.find(d => !/0\.5|ultra|wide/i.test(d.label) && /back/i.test(d.label));
+        if (normal) deviceId = normal.deviceId;
+    }
+
+    try {
+        const constraints = {
+            video: {
+                deviceId: deviceId ? { exact: deviceId } : undefined,
+                facingMode: deviceId ? undefined : "environment",
+                width: { ideal: 2560 },
+                height: { ideal: 1920 },
+                aspectRatio: { ideal: 1.333 }
+            },
+            audio: false
+        };
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const video = document.getElementById("camera-stream");
+        video.srcObject = cameraStream;
+
+        const btn = document.getElementById("btn-wide-toggle");
+        btn.textContent = isWideActive ? "1x" : "0.5x";
+
+    } catch (e) {
+        alert("Toggle Wide Failed: " + e.message);
+        isWideActive = !isWideActive; // revert state
+    }
+}
+
+function stopCameraStreamOnly() {
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+    }
+}
+
+// ... helper functions ...
+
+function capturePhoto() {
+    const video = document.getElementById("camera-stream");
+    const canvas = document.getElementById("camera-canvas");
+    if (!cameraStream) return;
+
+    // Limit photo size
+    const maxWidth = 2560;
+    let w = video.videoWidth;
+    let h = video.videoHeight;
+
+    if (w > maxWidth) {
+        const scale = maxWidth / w;
+        w = maxWidth;
+        h = Math.round(h * scale);
+    }
+
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+
+    // Apply WEAKER HDR (50% of previous)
+    ctx.filter = "contrast(1.01) saturate(1.025) brightness(1.005)";
+    ctx.drawImage(video, 0, 0, w, h);
+    ctx.filter = "none";
+
+    const includeFloor = document.getElementById("watermark-floor-check").checked;
+    const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
+    addWatermark(ctx, canvas, selectedUnit, floorText);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+    savePhoto(dataUrl);
+
+    closeCameraOverlay();
+}
+
+// ...
+
+function renderAllReports() {
+    const container = document.getElementById("reports-container");
+    container.innerHTML = "";
+    const activeContractors = Object.keys(currentReport);
+
+    if (activeContractors.length === 0) {
+        container.innerHTML = `<p style="text-align:center; color:#94a3b8; margin-top:20px;">No reports yet.</p>`;
+        return;
+    }
+
+    activeContractors.forEach(contractor => {
+        const { text, photoData } = generateContractorReportData(contractor); // Expect photoData objects
+        const card = document.createElement("div");
+        card.className = "report-card";
+        card.style.borderLeftColor = getContractorColor(contractor);
+
+        let imagesHtml = `<div class="preview-gallery">`;
+        if (photoData) {
+            // Group by Unit for filename ordering visual
+            photoData.forEach((item, idx) => {
+                const url = item.url;
+                const unit = item.unit;
+                const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+                // Filename: DATE_UNIT_IDX.jpg
+                const filename = `${dateStr}_${unit}_${idx + 1}.jpg`;
+                imagesHtml += `<a href="${url}" download="${filename}"><img src="${url}" class="preview-img"></a>`;
+            });
+        }
+        imagesHtml += `</div>`;
+
+        card.innerHTML = `
+            <div class="report-header">
+                <h3>${contractor}</h3>
+            </div>
+            <div class="report-content">${text}</div>
+            
+            <div class="action-row" style="display:flex; gap:10px; margin-top:10px;">
+                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">
+                    📋 Copy Text
+                </button>
+            </div>
+            <div style="margin-top:10px">${imagesHtml}</div>
+        `;
+        container.appendChild(card);
+    });
+}
+// Note: Updated shareToWhatsApp to handle new struct if needed? 
+// For now, let's just make generateContractorReportData return compatible structure.
+
+function generateContractorReportData(contractor) {
+    const data = currentReport[contractor];
+    let units = Object.keys(data).sort(naturalSort);
+    let allPhotoData = []; // Changed from allPhotoUrls
+    let body = "";
+
+    units.forEach(unit => {
+        const unitData = data[unit];
+        // Store visual data
+        unitData.photos.forEach(url => {
+            allPhotoData.push({ url: url, unit: unit });
+        });
+
+        if (unitData.tasks.length > 0) {
+            body += `${unit}:\n`;
+            unitData.tasks.forEach(t => {
+                body += `-${t.text}\n`;
+            });
+            body += `\n`;
+        }
+    });
+
+    const fullText = `${contractor}\n${body}`.trim();
+    // Return both formats if needed, or just new one
+    // Existing shareToWhatsApp expects photoUrls as string array?
+    // Let's refactor shareToWhatsApp to extract URLs.
+    return { text: fullText, photoData: allPhotoData };
+}
+
+async function shareToWhatsApp(contractor) {
+    const { text, photoData } = generateContractorReportData(contractor);
+    const photoUrls = photoData.map(p => p.url); // Extract URLs for compatibility
+
+    // ... existing share logic ...
+    // Convert dataURLs to File objects
+    const files = [];
+    for (let i = 0; i < photoData.length; i++) {
+        try {
+            const res = await fetch(photoData[i].url);
+            const blob = await res.blob();
+            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            // Unit specific filename in share
+            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
+            const file = new File([blob], filename, { type: 'image/jpeg' });
+            files.push(file);
+        } catch (e) {
+            console.error('Failed to convert photo', e);
+        }
+    }
+
+    // ... rest of share ...
+    if (navigator.share) {
+        const shareData = {
+            title: 'Construction Report',
+            text: text
+        };
+        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
+            shareData.files = files;
+        }
+        try { await navigator.share(shareData); return; } catch (err) { }
+    }
+    const encoded = encodeURIComponent(text);
+    window.open(`https://wa.me/?text=${encoded}`, '_blank');
 }
 
 function closeCameraOverlay() {
