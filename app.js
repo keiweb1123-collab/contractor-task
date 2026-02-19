@@ -353,28 +353,34 @@ function updateTaskCount() {
 // ---------------------------------------------------------
 // CAMERA
 // ---------------------------------------------------------
+// Camera
 async function startCamera() {
     if (cameraStream) return;
     try {
         let constraints;
 
+        // Base constraints for 4:3 aspect ratio (portrait-ish)
+        // Note: In landscape, 4:3 is width > height. In portrait, height > width.
+        // We'll ask for an ideal resolution that matches 4:3.
+        const baseConstraints = {
+            aspectRatio: { ideal: 1.333 }, // 4:3
+            width: { ideal: 1920 }, // Requesting high res
+            height: { ideal: 1440 }
+        };
+
         if (cameraDevices.length > 0 && cameraDevices[currentDeviceIndex]?.deviceId) {
-            // Use specific device (after permission has been granted)
             constraints = {
                 video: {
                     deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
+                    ...baseConstraints
                 },
                 audio: false
             };
         } else {
-            // First time: use facingMode
             constraints = {
                 video: {
-                    facingMode: "environment",
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
+                    facingMode: { ideal: "environment" },
+                    ...baseConstraints
                 },
                 audio: false
             };
@@ -383,30 +389,36 @@ async function startCamera() {
         cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
-        // Apply HDR-like filter to preview
-        video.style.filter = "contrast(1.15) saturate(1.3) brightness(1.05)";
-        // Show fullscreen overlay
+
+        // Apply WEAKER, more natural HDR-like filter
+        // Old: contrast(1.15) saturate(1.3) brightness(1.05)
+        video.style.filter = "contrast(1.05) saturate(1.1) brightness(1.02)";
+
         document.getElementById("camera-overlay").classList.remove("hidden");
 
-        // Enumerate devices after permission is granted
         if (cameraDevices.length === 0) {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
 
-            // Try to find wide-angle camera
-            const wideIdx = cameraDevices.findIndex(d =>
-                /wide|ultra|広角/i.test(d.label)
+            // Try to find ULTRA wide angle camera (0.5x)
+            // Keywords: "0.5", "ultra", "wide". 
+            // Often back camera ID 2 or similar on phones.
+            // We prioritize finding one that isn't the current one.
+            const ultraWideIdx = cameraDevices.findIndex(d =>
+                /0\.5|ultra|wide/i.test(d.label) ||
+                (d.getCapabilities && d.getCapabilities().zoom?.min < 1) // logical check if available
             );
-            if (wideIdx >= 0 && wideIdx !== currentDeviceIndex) {
-                // Switch to wide-angle
+
+            if (ultraWideIdx >= 0 && ultraWideIdx !== currentDeviceIndex) {
+                // Switch to ultra-wide
                 cameraStream.getTracks().forEach(t => t.stop());
                 cameraStream = null;
-                currentDeviceIndex = wideIdx;
+                currentDeviceIndex = ultraWideIdx;
+
                 const wideConstraints = {
                     video: {
-                        deviceId: { exact: cameraDevices[wideIdx].deviceId },
-                        width: { ideal: 1920 },
-                        height: { ideal: 1080 }
+                        deviceId: { exact: cameraDevices[ultraWideIdx].deviceId },
+                        ...baseConstraints
                     },
                     audio: false
                 };
@@ -414,15 +426,6 @@ async function startCamera() {
                 video.srcObject = cameraStream;
             }
         }
-
-        // Try to zoom out to minimum (widest FOV)
-        try {
-            const track = cameraStream.getVideoTracks()[0];
-            const caps = track.getCapabilities ? track.getCapabilities() : {};
-            if (caps.zoom && caps.zoom.min < 1) {
-                await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] });
-            }
-        } catch (e) { /* zoom not supported, ignore */ }
     } catch (err) {
         console.error(err);
         alert("Camera Error: " + err.message);
@@ -431,25 +434,22 @@ async function startCamera() {
 
 async function switchCamera() {
     if (!cameraStream) return;
-
     if (cameraDevices.length < 2) {
         alert("No other camera found.");
         return;
     }
 
-    // Stop current stream without resetting UI
     cameraStream.getTracks().forEach(track => track.stop());
     cameraStream = null;
-
-    // Move to next device
     currentDeviceIndex = (currentDeviceIndex + 1) % cameraDevices.length;
 
     try {
         const constraints = {
             video: {
                 deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
+                aspectRatio: { ideal: 1.333 },
                 width: { ideal: 1920 },
-                height: { ideal: 1080 }
+                height: { ideal: 1440 }
             },
             audio: false
         };
@@ -459,13 +459,13 @@ async function switchCamera() {
         video.srcObject = cameraStream;
     } catch (err) {
         console.error("Switch camera failed:", err);
-        alert("Camera switch failed: " + err.message);
         // Try to restart with default
         cameraStream = null;
         currentDeviceIndex = 0;
         await startCamera();
     }
 }
+
 function closeCameraOverlay() {
     stopCamera();
 }
@@ -481,10 +481,14 @@ function capturePhoto() {
     const canvas = document.getElementById("camera-canvas");
     if (!cameraStream) return;
 
-    // Limit photo size to max 1920px wide for performance
+    // Limit photo size
     const maxWidth = 1920;
     let w = video.videoWidth;
     let h = video.videoHeight;
+
+    // Ensure we process with correct aspect ratio if the stream doesn't match
+    // But usually we just take the stream size.
+
     if (w > maxWidth) {
         const scale = maxWidth / w;
         w = maxWidth;
@@ -495,10 +499,10 @@ function capturePhoto() {
     canvas.height = h;
     const ctx = canvas.getContext("2d");
 
-    // Apply HDR-like filter
-    ctx.filter = "contrast(1.15) saturate(1.3) brightness(1.05)";
+    // Apply WEAKER, natural HDR-like filter to the captured image
+    ctx.filter = "contrast(1.05) saturate(1.1) brightness(1.02)";
     ctx.drawImage(video, 0, 0, w, h);
-    ctx.filter = "none"; // Reset for watermark
+    ctx.filter = "none";
 
     const includeFloor = document.getElementById("watermark-floor-check").checked;
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
