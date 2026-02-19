@@ -289,20 +289,28 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-function handleOrientation(e) {
-    const gamma = e.gamma;
-    if (gamma > 45) currentRotation = -90;
-    else if (gamma < -45) currentRotation = 90;
-    else currentRotation = 0;
+function getDeviceRotation() {
+    // Use screen.orientation API (works without permission on all devices)
+    if (screen.orientation && screen.orientation.angle !== undefined) {
+        const angle = screen.orientation.angle;
+        // angle: 0=portrait, 90=landscape-left, 270=landscape-right, 180=upside-down
+        if (angle === 90) return -90;
+        if (angle === 270) return 90;
+        return 0;
+    }
+    // Fallback: window.orientation (older iOS/Android)
+    if (window.orientation !== undefined) {
+        const orient = window.orientation;
+        if (orient === 90) return -90;
+        if (orient === -90) return 90;
+        return 0;
+    }
+    return 0;
 }
 
 async function startCamera() {
     if (cameraStream) return;
 
-    // Non-iOS: start orientation listener immediately
-    if (typeof DeviceOrientationEvent === 'undefined' || typeof DeviceOrientationEvent.requestPermission !== 'function') {
-        window.addEventListener('deviceorientation', handleOrientation);
-    }
 
     try {
         let constraints = {
@@ -477,6 +485,7 @@ function capturePhoto() {
     const maxWidth = 2560;
     let w = video.videoWidth;
     let h = video.videoHeight;
+    currentRotation = getDeviceRotation();
     let isRotated = (Math.abs(currentRotation) === 90);
     let targetW = isRotated ? h : w;
     let targetH = isRotated ? w : h;
