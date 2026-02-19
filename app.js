@@ -295,21 +295,7 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-function getDeviceRotation() {
-    // Try screen.orientation API first
-    if (screen.orientation && screen.orientation.type) {
-        if (screen.orientation.type.startsWith('portrait')) return 0;
-        if (screen.orientation.type === 'landscape-primary') return 90;
-        if (screen.orientation.type === 'landscape-secondary') return -90;
-    }
-    // Fallback to window.orientation (iOS/older)
-    if (typeof window.orientation !== 'undefined') {
-        if (window.orientation === 90) return 90;
-        if (window.orientation === -90) return -90;
-        if (window.orientation === 180) return 180;
-    }
-    return 0;
-}
+// function getDeviceRotation() removed.
 
 async function startCamera() {
     if (cameraStream) return;
@@ -480,23 +466,15 @@ function capturePhoto() {
     if (!cameraStream) return;
 
     const maxWidth = 2560;
+    // Determine rotation - ZERO LOGIC
+    // We trust videoWidth/videoHeight to be correct.
+    // Why? Because recent complaints suggest manual rotation is actively breaking things.
+    // If the stream is sideways, IT IS SIDEWAYS. We will not fix it blindly.
     let w = video.videoWidth;
     let h = video.videoHeight;
 
-    // Get rotation angle
-    const angle = getDeviceRotation();
-    const isLandscape = (angle === 90 || angle === -90);
-
-    let targetW, targetH;
-
-    // Determine target dimensions based on rotation
-    if (isLandscape) {
-        targetW = Math.max(w, h);
-        targetH = Math.min(w, h);
-    } else {
-        targetW = Math.min(w, h);
-        targetH = Math.max(w, h);
-    }
+    let targetW = w;
+    let targetH = h;
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -510,19 +488,7 @@ function capturePhoto() {
 
     ctx.save();
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-
-    // Apply rotation to straighten image
-    ctx.translate(targetW / 2, targetH / 2);
-    ctx.rotate(angle * -1 * Math.PI / 180);
-
-    // Draw image centered in rotated context
-    if (isLandscape) {
-        // When rotated 90/-90, width/height are swapped in context
-        ctx.drawImage(video, -h / 2, -w / 2, h, w);
-    } else {
-        ctx.drawImage(video, -w / 2, -h / 2, w, h);
-    }
-
+    ctx.drawImage(video, 0, 0, targetW, targetH);
     ctx.restore();
     ctx.filter = "none";
 
