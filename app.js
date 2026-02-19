@@ -360,12 +360,11 @@ async function startCamera() {
         let constraints;
 
         // Base constraints for 4:3 aspect ratio (portrait-ish)
-        // Note: In landscape, 4:3 is width > height. In portrait, height > width.
-        // We'll ask for an ideal resolution that matches 4:3.
+        // High resolution 2560x1920 requested
         const baseConstraints = {
             aspectRatio: { ideal: 1.333 }, // 4:3
-            width: { ideal: 1920 }, // Requesting high res
-            height: { ideal: 1440 }
+            width: { ideal: 2560 },
+            height: { ideal: 1920 }
         };
 
         if (cameraDevices.length > 0 && cameraDevices[currentDeviceIndex]?.deviceId) {
@@ -391,10 +390,11 @@ async function startCamera() {
         video.srcObject = cameraStream;
 
         // Apply WEAKER, more natural HDR-like filter
-        // Old: contrast(1.15) saturate(1.3) brightness(1.05)
-        video.style.filter = "contrast(1.05) saturate(1.1) brightness(1.02)";
+        // Reduced to very subtle values
+        video.style.filter = "contrast(1.02) saturate(1.05) brightness(1.01)";
 
         document.getElementById("camera-overlay").classList.remove("hidden");
+
 
         if (cameraDevices.length === 0) {
             const devices = await navigator.mediaDevices.enumerateDevices();
@@ -468,8 +468,8 @@ async function manualSelectCamera() {
         video: {
             deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
             aspectRatio: { ideal: 1.333 },
-            width: { ideal: 1920 },
-            height: { ideal: 1440 }
+            width: { ideal: 2560 },
+            height: { ideal: 1920 }
         },
         audio: false
     };
@@ -503,8 +503,8 @@ async function switchCamera() {
             video: {
                 deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
                 aspectRatio: { ideal: 1.333 },
-                width: { ideal: 1920 },
-                height: { ideal: 1440 }
+                width: { ideal: 2560 },
+                height: { ideal: 1920 }
             },
             audio: false
         };
@@ -537,7 +537,7 @@ function capturePhoto() {
     if (!cameraStream) return;
 
     // Limit photo size
-    const maxWidth = 1920;
+    const maxWidth = 2560;
     let w = video.videoWidth;
     let h = video.videoHeight;
 
@@ -555,7 +555,7 @@ function capturePhoto() {
     const ctx = canvas.getContext("2d");
 
     // Apply WEAKER, natural HDR-like filter to the captured image
-    ctx.filter = "contrast(1.05) saturate(1.1) brightness(1.02)";
+    ctx.filter = "contrast(1.02) saturate(1.05) brightness(1.01)";
     ctx.drawImage(video, 0, 0, w, h);
     ctx.filter = "none";
 
