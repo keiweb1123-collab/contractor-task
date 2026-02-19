@@ -392,14 +392,32 @@ async function startCamera() {
             audio: false
         };
 
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        try {
+            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (initialErr) {
+            console.warn("High-res constraints failed, trying basic.", initialErr);
+            // Fallback: Remove resolution constraints, keep facing mode
+            constraints = {
+                video: {
+                    facingMode: "environment"
+                },
+                audio: false
+            };
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (fallbackErr) {
+                // Last resort: Any video
+                console.warn("Environment facing failed, trying any video.", fallbackErr);
+                cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            }
+        }
+
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
 
-        // Apply WEAKER HDR (50% of previous)
-        // Previous: contrast(1.02) saturate(1.05) brightness(1.01)
-        // New: contrast(1.01) saturate(1.025) brightness(1.005)
-        video.style.filter = "contrast(1.01) saturate(1.025) brightness(1.005)";
+        // Apply WEAKER HDR (Further reduced by 10%)
+        // New: contrast(1.005) saturate(1.01) brightness(1.002)
+        video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
 
         document.getElementById("camera-overlay").classList.remove("hidden");
 
@@ -579,8 +597,8 @@ function capturePhoto() {
     canvas.height = h;
     const ctx = canvas.getContext("2d");
 
-    // Apply WEAKER HDR (50% of previous)
-    ctx.filter = "contrast(1.01) saturate(1.025) brightness(1.005)";
+    // Apply WEAKER HDR (Further reduced by 10% - virtually natural)
+    ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
     ctx.drawImage(video, 0, 0, w, h);
     ctx.filter = "none";
 
@@ -588,7 +606,8 @@ function capturePhoto() {
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
     addWatermark(ctx, canvas, selectedUnit, floorText);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+    // Reduced quality to 0.5 for lighter files without resolution loss
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
     savePhoto(dataUrl);
 
     closeCameraOverlay();
@@ -806,6 +825,7 @@ function addWatermark(ctx, canvas, unitText, floorText) {
         yPos += lineHeight;
     });
 }
+// (Functionality moved to IndexedDB section)
 function selectPhotoFloor(floor) {
     selectedPhotoFloor = floor;
     document.querySelector("#photo-tab .chip-group").querySelectorAll(".chip").forEach(c => {
@@ -813,53 +833,16 @@ function selectPhotoFloor(floor) {
         else c.classList.remove("selected");
     });
 }
-function savePhoto(dataUrl) {
-    const contractor = getContractor(selectedUnit);
-    if (!currentReport[contractor]) currentReport[contractor] = {};
-    if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-    currentReport[contractor][selectedUnit].photos.push(dataUrl);
-
-    renderPhotoPreview();
-    saveLocalData();
-}
-
-function renderPhotoPreview() {
-    const gallery = document.getElementById("preview-gallery");
-    gallery.innerHTML = "";
-    const contractor = getContractor(selectedUnit);
-    if (!currentReport[contractor] || !currentReport[contractor][selectedUnit]) return;
-
-    currentReport[contractor][selectedUnit].photos.forEach((url, idx) => {
-        const wrapper = document.createElement("div");
-        wrapper.style.cssText = "position:relative; display:inline-block;";
-
-        const img = document.createElement("img");
-        img.src = url;
-        img.className = "preview-img";
-
-        const delBtn = document.createElement("button");
-        delBtn.textContent = "×";
-        delBtn.style.cssText = "position:absolute; top:2px; right:2px; background:rgba(0,0,0,0.7); color:white; border:none; border-radius:50%; width:24px; height:24px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1;";
-        delBtn.onclick = () => removePhoto(idx);
-
-        wrapper.appendChild(img);
-        wrapper.appendChild(delBtn);
-        gallery.appendChild(wrapper);
-    });
-}
 
 function removePhoto(index) {
     const contractor = getContractor(selectedUnit);
     if (currentReport[contractor] && currentReport[contractor][selectedUnit]) {
         currentReport[contractor][selectedUnit].photos.splice(index, 1);
-        renderPhotoPreview();
+        renderPhotoPreview(); // Async now
         saveLocalData();
     }
 }
 
-// ---------------------------------------------------------
-// SAVING & REPORTING
-// ---------------------------------------------------------
 function saveAndClose() {
     const contractor = getContractor(selectedUnit);
     if (!currentReport[contractor]) currentReport[contractor] = {};
@@ -870,115 +853,6 @@ function saveAndClose() {
 
     resetSelection();
     saveLocalData();
-}
-
-function renderAllReports() {
-    const container = document.getElementById("reports-container");
-    container.innerHTML = "";
-    const activeContractors = Object.keys(currentReport);
-
-    if (activeContractors.length === 0) {
-        container.innerHTML = `<p style="text-align:center; color:#94a3b8; margin-top:20px;">No reports yet.</p>`;
-        return;
-    }
-
-    activeContractors.forEach(contractor => {
-        const { text, photoUrls } = generateContractorReportData(contractor);
-        const card = document.createElement("div");
-        card.className = "report-card";
-        card.style.borderLeftColor = getContractorColor(contractor);
-
-        let imagesHtml = `<div class="preview-gallery">`;
-        photoUrls.forEach((url, idx) => {
-            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            const filename = `${dateStr}_${contractor}_${contractor === 'Unassigned' ? 'img' : contractor.substring(0, 3)}_${idx + 1}.jpg`;
-            imagesHtml += `<a href="${url}" download="${filename}"><img src="${url}" class="preview-img"></a>`;
-        });
-        imagesHtml += `</div>`;
-
-        card.innerHTML = `
-            <div class="report-header">
-                <h3>${contractor}</h3>
-            </div>
-            <div class="report-content">${text}</div>
-            
-            <div class="action-row" style="display:flex; gap:10px; margin-top:10px;">
-                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">
-                    📋 Copy Text
-                </button>
-                <button class="copy-btn" style="background-color:#25D366; color:white;" onclick="shareToWhatsApp('${contractor}')">
-                    💬 Share WA
-                </button>
-            </div>
-            <div style="margin-top:10px">${imagesHtml}</div>
-        `;
-        container.appendChild(card);
-    });
-}
-
-async function shareToWhatsApp(contractor) {
-    const { text, photoUrls } = generateContractorReportData(contractor);
-
-    // Convert dataURLs to File objects
-    const files = [];
-    for (let i = 0; i < photoUrls.length; i++) {
-        try {
-            const res = await fetch(photoUrls[i]);
-            const blob = await res.blob();
-            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            const file = new File([blob], `${dateStr}_${contractor}_${i + 1}.jpg`, { type: 'image/jpeg' });
-            files.push(file);
-        } catch (e) {
-            console.error('Failed to convert photo', e);
-        }
-    }
-
-    // Try native share with files
-    if (navigator.share) {
-        const shareData = {
-            title: 'Construction Report',
-            text: text
-        };
-
-        // Add files if supported
-        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
-            shareData.files = files;
-        }
-
-        try {
-            await navigator.share(shareData);
-            return;
-        } catch (err) {
-            console.log("Share failed or canceled", err);
-        }
-    }
-
-    // Fallback to WhatsApp URL (text only)
-    const encoded = encodeURIComponent(text);
-    window.open(`https://wa.me/?text=${encoded}`, '_blank');
-}
-
-function generateContractorReportData(contractor) {
-    const data = currentReport[contractor];
-    let units = Object.keys(data).sort(naturalSort);
-    let allPhotoUrls = [];
-    let body = "";
-
-    units.forEach(unit => {
-        const unitData = data[unit];
-        allPhotoUrls = allPhotoUrls.concat(unitData.photos);
-
-        if (unitData.tasks.length > 0) {
-            body += `${unit}:\n`;
-            unitData.tasks.forEach(t => {
-                body += `-${t.text}\n`;
-            });
-            body += `\n`;
-        }
-    });
-
-    const fullText = `${contractor}\n${body}`.trim();
-    return { text: fullText, photoUrls: allPhotoUrls };
 }
 
 function naturalSort(a, b) {
@@ -1005,8 +879,9 @@ function copyText(btn, text) {
 // INDEXEDDB PERSISTENCE (replaces localStorage for larger storage)
 // ---------------------------------------------------------
 const DB_NAME = "ConstructionLogDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented for 'images' store
 const DB_STORE = "reports";
+const IMG_STORE = "images";
 
 function openDB() {
     return new Promise((resolve, reject) => {
@@ -1016,9 +891,36 @@ function openDB() {
             if (!db.objectStoreNames.contains(DB_STORE)) {
                 db.createObjectStore(DB_STORE, { keyPath: "id" });
             }
+            if (!db.objectStoreNames.contains(IMG_STORE)) {
+                db.createObjectStore(IMG_STORE); // Key = UUID
+            }
         };
         request.onsuccess = (e) => resolve(e.target.result);
         request.onerror = (e) => reject(e.target.error);
+    });
+}
+
+// Helper to save image blob
+async function saveImageToDB(id, blob) {
+    const db = await openDB();
+    const tx = db.transaction(IMG_STORE, "readwrite");
+    const store = tx.objectStore(IMG_STORE);
+    store.put(blob, id);
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+// Helper to get image blob
+async function getImageFromDB(id) {
+    const db = await openDB();
+    const tx = db.transaction(IMG_STORE, "readonly");
+    const store = tx.objectStore(IMG_STORE);
+    const req = store.get(id);
+    return new Promise((resolve, reject) => {
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
     });
 }
 
@@ -1042,20 +944,6 @@ async function saveLocalData() {
         db.close();
     } catch (e) {
         console.error("Failed to save data:", e);
-        // Fallback: try localStorage for task text only (no photos)
-        try {
-            const dateKey = new Date().toISOString().split('T')[0];
-            const taskOnly = {};
-            for (const [c, units] of Object.entries(currentReport)) {
-                taskOnly[c] = {};
-                for (const [u, data] of Object.entries(units)) {
-                    taskOnly[c][u] = { tasks: data.tasks, photos: [] };
-                }
-            }
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({ date: dateKey, data: taskOnly }));
-        } catch (e2) {
-            console.error("Fallback save also failed:", e2);
-        }
     }
 }
 
@@ -1080,60 +968,206 @@ async function loadLocalData() {
             } else {
                 console.log("New day detected, clearing old data.");
                 currentReport = {};
-                await saveLocalData(); // Clear old data
+                await saveLocalData();
             }
             return;
         }
     } catch (e) {
-        console.error("IndexedDB load failed, trying localStorage fallback:", e);
-    }
-
-    // Fallback: try loading from old localStorage
-    try {
-        // Check main key
-        let json = localStorage.getItem(STORAGE_KEY);
-        // Check backup key  
-        if (!json) json = localStorage.getItem(STORAGE_KEY + "_backup");
-
-        if (json) {
-            const parsed = JSON.parse(json);
-            const todayKey = new Date().toISOString().split('T')[0];
-            if (parsed.date === todayKey) {
-                currentReport = parsed.data || {};
-                console.log("Data loaded from localStorage fallback.");
-                // Migrate to IndexedDB
-                await saveLocalData();
-            }
-            localStorage.removeItem(STORAGE_KEY);
-            localStorage.removeItem(STORAGE_KEY + "_backup");
-        }
-    } catch (e) {
-        console.error("localStorage fallback also failed:", e);
+        console.error("IndexedDB load failed", e);
     }
 }
 
-// Auto-save when user switches away from the app
+// Auto-save logic remains...
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
-        // Sync any unsaved task data before app goes to background
-        if (selectedUnit) {
-            syncCurrentUnitData();
-        }
+        if (selectedUnit) syncCurrentUnitData();
         saveLocalData();
     }
 });
-
-// Auto-save before page unload
 window.addEventListener("beforeunload", () => {
-    if (selectedUnit) {
-        syncCurrentUnitData();
-    }
-    // Use synchronous localStorage as last resort (IndexedDB may not complete)
-    try {
-        const dateKey = new Date().toISOString().split('T')[0];
-        const payload = { date: dateKey, data: currentReport };
-        localStorage.setItem(STORAGE_KEY + "_backup", JSON.stringify(payload));
-    } catch (e) {
-        // Best effort only
-    }
+    if (selectedUnit) syncCurrentUnitData();
+    // No synchronous fallback possible for large binary data
 });
+
+// Update Save Photo to use Blob + ID
+function savePhoto(dataUrl) {
+    // Convert dataURL to Blob
+    fetch(dataUrl)
+        .then(res => res.blob())
+        .then(async blob => {
+            const id = crypto.randomUUID();
+            await saveImageToDB(id, blob);
+
+            const contractor = getContractor(selectedUnit);
+            if (!currentReport[contractor]) currentReport[contractor] = {};
+            if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
+
+            // Push reference
+            currentReport[contractor][selectedUnit].photos.push({
+                type: 'db_ref',
+                id: id,
+                timestamp: Date.now()
+            });
+
+            renderPhotoPreview();
+            saveLocalData();
+        })
+        .catch(err => console.error("Save failed", err));
+}
+
+// Re-write to handle async loading
+async function renderPhotoPreview() {
+    const gallery = document.getElementById("preview-gallery");
+    gallery.innerHTML = "";
+    const contractor = getContractor(selectedUnit);
+    if (!currentReport[contractor] || !currentReport[contractor][selectedUnit]) return;
+
+    const photos = currentReport[contractor][selectedUnit].photos;
+
+    for (let i = 0; i < photos.length; i++) {
+        const item = photos[i];
+        let src = "";
+
+        if (typeof item === 'string') {
+            // Legacy Base64
+            src = item;
+        } else if (item.type === 'db_ref') {
+            const blob = await getImageFromDB(item.id);
+            if (blob) src = URL.createObjectURL(blob);
+        }
+
+        if (!src) continue;
+
+        const wrapper = document.createElement("div");
+        wrapper.style.cssText = "position:relative; display:inline-block;";
+
+        const img = document.createElement("img");
+        img.src = src;
+        img.className = "preview-img";
+
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "×";
+        delBtn.style.cssText = "position:absolute; top:2px; right:2px; background:rgba(0,0,0,0.7); color:white; border:none; border-radius:50%; width:24px; height:24px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1;";
+        delBtn.onclick = () => removePhoto(i);
+
+        wrapper.appendChild(img);
+        wrapper.appendChild(delBtn);
+        gallery.appendChild(wrapper);
+    }
+}
+
+// Updated Render Reports (Async)
+async function renderAllReports() {
+    const container = document.getElementById("reports-container");
+    container.innerHTML = "";
+    const activeContractors = Object.keys(currentReport);
+
+    if (activeContractors.length === 0) {
+        container.innerHTML = `<p style="text-align:center; color:#94a3b8; margin-top:20px;">No reports yet.</p>`;
+        return;
+    }
+
+    for (const contractor of activeContractors) {
+        const { text, photoData } = await generateContractorReportDataAsync(contractor);
+
+        const card = document.createElement("div");
+        card.className = "report-card";
+        card.style.borderLeftColor = getContractorColor(contractor);
+
+        let imagesHtml = `<div class="preview-gallery">`;
+        if (photoData) {
+            photoData.forEach((item, idx) => {
+                const url = item.url; // Blob URL
+                const unit = item.unit;
+                const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+                const filename = `${dateStr}_${unit}_${idx + 1}.jpg`;
+                imagesHtml += `<a href="${url}" download="${filename}"><img src="${url}" class="preview-img"></a>`;
+            });
+        }
+        imagesHtml += `</div>`;
+
+        card.innerHTML = `
+            <div class="report-header">
+                <h3>${contractor}</h3>
+            </div>
+            <div class="report-content">${text}</div>
+            
+            <div class="action-row" style="display:flex; gap:10px; margin-top:10px;">
+                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">
+                    📋 Copy Text
+                </button>
+            </div>
+            <div style="margin-top:10px">${imagesHtml}</div>
+        `;
+        container.appendChild(card);
+    }
+}
+
+// Updated Generation Logic
+async function generateContractorReportDataAsync(contractor) {
+    const data = currentReport[contractor];
+    let units = Object.keys(data).sort(naturalSort);
+    let allPhotoData = [];
+    let body = "";
+
+    for (const unit of units) {
+        const unitData = data[unit];
+
+        // Resolve images
+        for (let photo of unitData.photos) {
+            let url = "";
+            if (typeof photo === 'string') {
+                url = photo;
+            } else if (photo.type === 'db_ref') {
+                const blob = await getImageFromDB(photo.id);
+                if (blob) url = URL.createObjectURL(blob);
+            }
+            if (url) allPhotoData.push({ url: url, unit: unit });
+        }
+
+        if (unitData.tasks.length > 0) {
+            body += `${unit}:\n`;
+            unitData.tasks.forEach(t => {
+                body += `-${t.text}\n`;
+            });
+            body += `\n`;
+        }
+    }
+
+    const fullText = `${contractor}\n${body}`.trim();
+    return { text: fullText, photoData: allPhotoData };
+}
+
+// Note: generateContractorReportData (sync) is deprecated but kept if needed for non-image logic.
+// We replace original shareToWhatsApp to use new async generator.
+
+async function shareToWhatsApp(contractor) {
+    const { text, photoData } = await generateContractorReportDataAsync(contractor);
+
+    const files = [];
+    for (let i = 0; i < photoData.length; i++) {
+        try {
+            const res = await fetch(photoData[i].url);
+            const blob = await res.blob();
+            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
+            const file = new File([blob], filename, { type: 'image/jpeg' });
+            files.push(file);
+        } catch (e) {
+            console.error('Failed to convert photo', e);
+        }
+    }
+
+    if (navigator.share) {
+        const shareData = {
+            title: 'Construction Report',
+            text: text
+        };
+        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
+            shareData.files = files;
+        }
+        try { await navigator.share(shareData); return; } catch (err) { }
+    }
+    const encoded = encodeURIComponent(text);
+    window.open(`https://wa.me/?text=${encoded}`, '_blank');
+}
