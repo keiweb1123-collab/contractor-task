@@ -565,9 +565,8 @@ function saveAndClose() {
     if (!currentReport[contractor]) currentReport[contractor] = {};
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
     currentReport[contractor][selectedUnit].tasks = currentTaskList.map(t => ({ text: t }));
-    resetSelection();
     saveLocalData();
-    renderAllReports();
+    resetSelection();
 }
 
 function naturalSort(a, b) {
