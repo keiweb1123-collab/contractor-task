@@ -1,5 +1,8 @@
-// Main JS - V3
-// Data Configuration
+// One-Tap Reporter - app.js
+
+// =============================================================
+// DATA CONFIGURATION
+// =============================================================
 const units = [
     "Unit1", "Unit2", "Unit3A", "Unit3B", "Unit5", "Unit6", "Unit7",
     "Unit8", "Unit9", "Unit10", "Unit11", "Unit12A", "Unit12B",
@@ -12,52 +15,40 @@ const assignments = {
     "INITI INDAH": ["Unit3B", "Unit5", "Unit6", "Unit7"]
 };
 
-// ... (skipping unchanged parts) ...
+const STORAGE_KEY = "construction_log_data";
+const DB_NAME = "ConstructionLogDB";
+const DB_VERSION = 2;
+const DB_STORE = "reports";
+const IMG_STORE = "images";
 
-// ... (skipping unchanged parts) ... 
-// generateContractorReportData removed (replaced by async version at bottom)
-
-// State
+// =============================================================
+// STATE
+// =============================================================
 let currentReport = {};
 let selectedUnit = null;
 let currentTaskList = [];
 let selectedPhotoFloor = null;
 let cameraStream = null;
-let pendingOptions = new Set(); // For multi-select in modal
+let pendingOptions = new Set();
 let pendingTaskName = "";
 let pendingTaskCategory = "";
-// Camera
 let cameraDevices = [];
 let currentDeviceIndex = 0;
 let normalCameraIndex = -1;
 let wideCameraIndex = -1;
 let isWideActive = false;
 let currentFacingMode = "environment";
-// Orientation State
 let currentRotation = 0; // 0, 90, -90
 
-function handleOrientation(e) {
-    const gamma = e.gamma; // Left/Right tilt
-    // If gamma is high (>45 or <-45), it's likely landscape
-    // Note: This is a simple heuristic.
-    if (gamma > 45) {
-        currentRotation = -90; // Landscape 
-    } else if (gamma < -45) {
-        currentRotation = 90; // Landscape
-    } else {
-        currentRotation = 0; // Portrait
-    }
-}
-
-const STORAGE_KEY = "construction_log_data";
-
+// =============================================================
+// INIT
+// =============================================================
 document.addEventListener("DOMContentLoaded", async () => {
     await loadLocalData();
     initGrid();
     renderAllReports();
 });
 
-// Init
 function initGrid() {
     const grid = document.getElementById("unit-grid");
     grid.innerHTML = "";
@@ -65,83 +56,66 @@ function initGrid() {
         const contractor = getContractor(unit);
         const btn = document.createElement("button");
         btn.className = "unit-btn";
-        // Modern Pop Style HTML
         btn.innerHTML = `<strong>${unit}</strong> <span>${contractor === "Unassigned" ? "" : contractor.substring(0, 3)}</span>`;
         btn.style.backgroundColor = getContractorColor(contractor);
         btn.onclick = () => openInput(unit, contractor);
         grid.appendChild(btn);
     });
 }
+
 function getContractor(unit) {
     for (const [contractor, unitList] of Object.entries(assignments)) {
         if (unitList.includes(unit)) return contractor;
     }
     return "Unassigned";
 }
+
 function getContractorColor(contractor) {
     switch (contractor) {
-        case "IADECCO": return "var(--color-iadecco)"; // Red
-        case "YAMATO": return "var(--color-yamato)";   // Blue
-        case "INITI INDAH": return "var(--color-initi)"; // Green
+        case "IADECCO": return "var(--color-iadecco)";
+        case "YAMATO": return "var(--color-yamato)";
+        case "INITI INDAH": return "var(--color-initi)";
         default: return "var(--color-unassigned)";
     }
 }
 
-// UI Opening
+// =============================================================
+// UI
+// =============================================================
 function openInput(unit, contractor) {
     selectedUnit = unit;
     selectedPhotoFloor = null;
 
-    // Load existing tasks if any, or start clean
     if (currentReport[contractor] && currentReport[contractor][unit]) {
-        // Clone to avoid reference issues
         currentTaskList = [...currentReport[contractor][unit].tasks.map(t => t.text)];
     } else {
         currentTaskList = [];
     }
 
-    // Full screen Overlay
-    document.body.style.overflow = "hidden"; // Prevent background scroll
+    document.body.style.overflow = "hidden";
     document.getElementById("input-section").classList.remove("hidden");
-
     document.getElementById("selected-unit-display").textContent = unit;
-    // Badge removed
-
-    // Reset contents
     document.getElementById("preview-gallery").innerHTML = "";
     document.querySelectorAll(".chip").forEach(c => c.classList.remove("selected"));
     document.getElementById("custom-task-input").value = "";
     renderTaskList();
     updateTaskCount();
-
-    // Load existing photos for preview
     renderPhotoPreview();
-
     switchTab('photo');
 }
 
 function resetSelection() {
     document.body.style.overflow = "auto";
     document.getElementById("input-section").classList.add("hidden");
-
-    // Hard reset of all temporary state
     selectedUnit = null;
     currentTaskList = [];
     pendingOptions.clear();
     pendingTaskName = "";
     document.getElementById("custom-task-input").value = "";
-    document.getElementById("task-list-display").innerHTML = ""; // Visually clear immediately
-
+    document.getElementById("task-list-display").innerHTML = "";
     stopCamera();
     renderAllReports();
 }
-
-// ... (skip unchanged) ...
-
-// ---------------------------------------------------------
-// SAVING & REPORTING
-// ---------------------------------------------------------
-// [Deleted duplicate saveAndClose function from here]
 
 function switchTab(tab) {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -157,9 +131,9 @@ function switchTab(tab) {
     }
 }
 
-// ---------------------------------------------------------
-// SMART TASK MODAL (MULTI-SELECT)
-// ---------------------------------------------------------
+// =============================================================
+// TASK MODAL
+// =============================================================
 function openTaskOption(taskName, type) {
     pendingTaskName = taskName;
     pendingTaskCategory = type;
@@ -193,13 +167,7 @@ function openTaskOption(taskName, type) {
     });
 
     modal.classList.remove("hidden");
-
-    // Add click listener to background
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            closeModal();
-        }
-    };
+    modal.onclick = (e) => { if (e.target === modal) closeModal(); };
 }
 
 function toggleOption(btn, value) {
@@ -213,36 +181,23 @@ function toggleOption(btn, value) {
 }
 
 function confirmModalSelection() {
-    if (pendingOptions.size === 0) {
-        closeModal();
-        return;
-    }
+    if (pendingOptions.size === 0) { closeModal(); return; }
 
     const selectedArray = Array.from(pendingOptions);
-    const joinedSelection = selectedArray.join(", "); // "GF, 1F"
+    const joinedSelection = selectedArray.join(", ");
 
-    // 2-Step Flow for Rebar (Struct), Casting, Form work, Demolishing
     if (pendingTaskCategory === 'rebar_struct_targets' || pendingTaskCategory === 'casting_targets' || pendingTaskCategory === 'formwork_targets' || pendingTaskCategory === 'demolishing_targets') {
-        // Step 2: Now ask for floor for these items
-        if (pendingTaskCategory === 'casting_targets') {
-            pendingTaskName = `Casting concrete for ${joinedSelection}`;
-        } else if (pendingTaskCategory === 'formwork_targets') {
-            pendingTaskName = `Form work installation for ${joinedSelection}`;
-        } else if (pendingTaskCategory === 'demolishing_targets') {
-            pendingTaskName = `Demolishing formwork for ${joinedSelection}`;
-        } else {
-            pendingTaskName = `Rebar Installation for ${joinedSelection}`;
-        }
+        if (pendingTaskCategory === 'casting_targets') pendingTaskName = `Casting concrete for ${joinedSelection}`;
+        else if (pendingTaskCategory === 'formwork_targets') pendingTaskName = `Form work installation for ${joinedSelection}`;
+        else if (pendingTaskCategory === 'demolishing_targets') pendingTaskName = `Demolishing formwork for ${joinedSelection}`;
+        else pendingTaskName = `Rebar Installation for ${joinedSelection}`;
 
-        pendingTaskCategory = 'floor_lift_rebar'; // Reuse existing floor options
-
-        // Clear modal for Step 2
+        pendingTaskCategory = 'floor_lift_rebar';
         pendingOptions.clear();
         const grid = document.getElementById("modal-options");
         const title = document.getElementById("modal-title");
         grid.innerHTML = "";
         title.textContent = `${pendingTaskName} on...`;
-
         ["GF", "1F", "2F", "3F", "RF"].forEach(f => {
             const btn = document.createElement("button");
             btn.className = "modal-option-btn";
@@ -250,31 +205,22 @@ function confirmModalSelection() {
             btn.onclick = () => toggleOption(btn, f);
             grid.appendChild(btn);
         });
-        return; // Don't close, wait for floor selection
+        return;
     }
 
-    // Single-step target flows (no floor selection)
     if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets') {
         let prefix;
-        if (pendingTaskCategory === 'lean_concrete_targets') {
-            prefix = 'Lean concrete for';
-        } else if (pendingTaskCategory === 'rebar_fab_targets') {
-            prefix = 'Rebar fabrication for';
-        } else {
-            prefix = `${pendingTaskName} for`;
-        }
+        if (pendingTaskCategory === 'lean_concrete_targets') prefix = 'Lean concrete for';
+        else if (pendingTaskCategory === 'rebar_fab_targets') prefix = 'Rebar fabrication for';
+        else prefix = `${pendingTaskName} for`;
         addTaskDirect(`${prefix} ${joinedSelection}`);
         closeModal();
         return;
     }
 
-    // Default text generation
-    let finalText = "";
-    if (pendingTaskCategory.includes('floor')) {
-        finalText = `${pendingTaskName} on ${joinedSelection}`;
-    } else {
-        finalText = `${pendingTaskName} for ${joinedSelection}`;
-    }
+    let finalText = pendingTaskCategory.includes('floor')
+        ? `${pendingTaskName} on ${joinedSelection}`
+        : `${pendingTaskName} for ${joinedSelection}`;
 
     addTaskDirect(finalText);
     closeModal();
@@ -284,14 +230,13 @@ function closeModal() {
     document.getElementById("option-modal").classList.add("hidden");
 }
 
-// ---------------------------------------------------------
-// TASK LIST MANAGEMENT
-// ---------------------------------------------------------
+// =============================================================
+// TASK LIST
+// =============================================================
 function addTaskDirect(text) {
     currentTaskList.push(text);
     renderTaskList();
     updateTaskCount();
-    // Aggressive Save
     syncCurrentUnitData();
     saveLocalData();
 }
@@ -299,17 +244,13 @@ function addTaskDirect(text) {
 function addCustomTask() {
     const input = document.getElementById("custom-task-input");
     const val = input.value.trim();
-    if (val) {
-        addTaskDirect(val);
-        input.value = "";
-    }
+    if (val) { addTaskDirect(val); input.value = ""; }
 }
 
 function removeTask(index) {
     currentTaskList.splice(index, 1);
     renderTaskList();
     updateTaskCount();
-    // Aggressive Save
     syncCurrentUnitData();
     saveLocalData();
 }
@@ -319,8 +260,6 @@ function syncCurrentUnitData() {
     const contractor = getContractor(selectedUnit);
     if (!currentReport[contractor]) currentReport[contractor] = {};
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-
-    // Preserve photos, update tasks
     const existingPhotos = currentReport[contractor][selectedUnit].photos;
     currentReport[contractor][selectedUnit] = {
         tasks: currentTaskList.map(t => ({ text: t })),
@@ -331,12 +270,10 @@ function syncCurrentUnitData() {
 function renderTaskList() {
     const display = document.getElementById("task-list-display");
     display.innerHTML = "";
-
     if (currentTaskList.length === 0) {
         display.innerHTML = '<p class="empty-msg">No tasks yet.</p>';
         return;
     }
-
     currentTaskList.forEach((task, index) => {
         const div = document.createElement("div");
         div.className = "task-item-removable";
@@ -349,78 +286,45 @@ function updateTaskCount() {
     document.getElementById("task-count").textContent = currentTaskList.length;
 }
 
-// ---------------------------------------------------------
+// =============================================================
 // CAMERA
-// ---------------------------------------------------------
-// Camera State (Moved to top of file or already declared)
-// We already declared these at the top:
-// let cameraDevices = [];
-// let currentDeviceIndex = 0;
-// But now we added new ones efficiently.
-// Let's just ensure we don't redeclare them here if they are already at top.
-// The previous edit added them at line 353, but they were ALSO at line 50.
-// I will remove the ONES AT line 353/357 and rely on the ones at the top, 
-// OR consolidate them. 
+// =============================================================
+function handleOrientation(e) {
+    const gamma = e.gamma;
+    if (gamma > 45) currentRotation = -90;
+    else if (gamma < -45) currentRotation = 90;
+    else currentRotation = 0;
+}
 
-// Actually, I will just remove the re-declarations I added in the previous step
-// and ensure the new variables (normalCameraIndex, etc) are declared once at the top.
-
-// Wait, I can't see the top right now easily without view_file, but the error says line 50.
-// So I should remove them from line 357.
-
-// Camera
 async function startCamera() {
     if (cameraStream) return;
 
-    // On non-iOS, start listening immediately (no permission needed)
+    // Non-iOS: start orientation listener immediately
     if (typeof DeviceOrientationEvent === 'undefined' || typeof DeviceOrientationEvent.requestPermission !== 'function') {
         window.addEventListener('deviceorientation', handleOrientation);
     }
 
     try {
-        const baseConstraints = {
-            aspectRatio: { ideal: 1.333 },
-            width: { ideal: 2560 },
-            height: { ideal: 1920 }
-        };
-
-        // Initial launch - try specific device if known, else facingMode
         let constraints = {
-            video: {
-                facingMode: { ideal: "environment" },
-                ...baseConstraints
-            },
+            video: { facingMode: { ideal: "environment" }, aspectRatio: { ideal: 1.333 }, width: { ideal: 2560 }, height: { ideal: 1920 } },
             audio: false
         };
 
         try {
             cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (initialErr) {
-            console.warn("High-res constraints failed, trying basic.", initialErr);
-            // Fallback: Remove resolution constraints, keep facing mode
-            constraints = {
-                video: {
-                    facingMode: "environment"
-                },
-                audio: false
-            };
+        } catch (e1) {
             try {
-                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            } catch (fallbackErr) {
-                // Last resort: Any video
-                console.warn("Environment facing failed, trying any video.", fallbackErr);
+                cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+            } catch (e2) {
                 cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             }
         }
 
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
-
         video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-
         document.getElementById("camera-overlay").classList.remove("hidden");
 
-        // Enumerate and Identify Cameras
         if (cameraDevices.length === 0) {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
@@ -428,7 +332,6 @@ async function startCamera() {
 
             const track = cameraStream.getVideoTracks()[0];
             const settings = track.getSettings();
-
             const currentId = settings.deviceId;
             const currentIdx = cameraDevices.findIndex(d => d.deviceId === currentId);
             if (currentIdx >= 0) normalCameraIndex = currentIdx;
@@ -457,21 +360,16 @@ async function requestOrientationPermission() {
             const response = await DeviceOrientationEvent.requestPermission();
             if (response === 'granted') {
                 window.addEventListener('deviceorientation', handleOrientation);
-                // Hide button after permission granted
                 const btn = document.getElementById('btn-orientation');
                 if (btn) btn.style.display = 'none';
-                alert("傾き検知が有効になりました！");
             } else {
-                alert("傾き検知は許可されませんでした。縦向き固定で撮影します。");
+                alert("傾き検知が許可されませんでした。縦向き固定で撮影します。");
             }
         } catch (e) {
-            alert("エラー: " + e.message);
+            console.warn("Orientation permission error:", e.message);
         }
-    } else {
-        alert("このデバイスは傾き検知に対応しています（自動で有効）。");
     }
 }
-
 
 function populateCameraSelect() {
     const select = document.getElementById("camera-select");
@@ -491,33 +389,16 @@ async function manualSelectCamera() {
     const idx = parseInt(select.value);
     if (isNaN(idx)) return;
 
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(t => t.stop());
-        cameraStream = null;
-    }
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
     currentDeviceIndex = idx;
 
-    // Check if selected matches wide/normal index to update toggle state if needed?
-    // For now just basic switch.
-
-    // Attempt to respect high-res
-    const constraints = {
-        video: {
-            deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
-            aspectRatio: { ideal: 1.333 },
-            width: { ideal: 2560 },
-            height: { ideal: 1920 }
-        },
-        audio: false
-    };
-
     try {
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId }, aspectRatio: { ideal: 1.333 }, width: { ideal: 2560 }, height: { ideal: 1920 } },
+            audio: false
+        });
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
-
-        // Note: manual selection might desync wide toggle state visually, 
-        // but toggleWideMode relies on indices so it might be okay.
     } catch (err) {
         alert("Failed to switch: " + err.message);
     }
@@ -526,141 +407,68 @@ async function manualSelectCamera() {
 async function switchCameraFace() {
     if (!cameraStream) return;
     stopCameraStreamOnly();
-
-    // Toggle facing mode
     currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
-
-    // If switching to user, hide wide button
     const btnWide = document.getElementById("btn-wide-toggle");
     if (currentFacingMode === "user") btnWide.classList.add("hidden");
 
-    // Reset indices check when switching face
-    // For simplicity, just request facingMode and let browser pick
     try {
-        const constraints = {
-            video: {
-                facingMode: { exact: currentFacingMode },
-                width: { ideal: 2560 },
-                height: { ideal: 1920 },
-                aspectRatio: { ideal: 1.333 }
-            },
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: currentFacingMode }, width: { ideal: 2560 }, height: { ideal: 1920 }, aspectRatio: { ideal: 1.333 } },
             audio: false
-        };
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        });
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
-
-        // Re-evaluate wide availability if back
         if (currentFacingMode === "environment") {
-            // We might need to re-find normal/wide indices if they changed IDs (unlikely but safe)
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
-            // Attempt to find wide again
             wideCameraIndex = cameraDevices.findIndex(d => /0\.5|ultra|wide/i.test(d.label));
-            if (wideCameraIndex >= 0) {
-                btnWide.classList.remove("hidden");
-                btnWide.textContent = "0.5x";
-                isWideActive = false;
-            }
+            if (wideCameraIndex >= 0) { btnWide.classList.remove("hidden"); btnWide.textContent = "0.5x"; isWideActive = false; }
         }
-
     } catch (err) {
-        // Fallback to ideal if exact fails
         try {
-            const constraints = {
-                video: {
-                    facingMode: { ideal: currentFacingMode },
-                    width: { ideal: 2560 },
-                    height: { ideal: 1920 },
-                    aspectRatio: { ideal: 1.333 }
-                },
-                audio: false
-            };
-            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: currentFacingMode } }, audio: false });
             const video = document.getElementById("camera-stream");
             video.srcObject = cameraStream;
-        } catch (e) {
-            alert("Camera Switch Failed: " + e.message);
-        }
+        } catch (e) { alert("Camera Switch Failed: " + e.message); }
     }
 }
 
 async function toggleWideMode() {
-    if (!cameraStream) return;
-    if (wideCameraIndex === -1) return;
-
+    if (!cameraStream || wideCameraIndex === -1) return;
     stopCameraStreamOnly();
-
     isWideActive = !isWideActive;
     const targetIdx = isWideActive ? wideCameraIndex : normalCameraIndex;
-    // If normal index invalid, fallback to default logic? 
-    // Actually if we found wide, we must have found normal as "not wide".
-    // If normalCameraIndex IS -1 (unknown), we might just rely on enumerate excluding current wide?
-    // Let's rely on stored IDs.
-
     let deviceId = cameraDevices[targetIdx]?.deviceId;
-
-    // IF we don't have a specific ID for normal (e.g. first launch), try to find it again
     if (!deviceId && !isWideActive) {
-        // Just request environment again?
-        // Or find the one that ISN'T wide
         const normal = cameraDevices.find(d => !/0\.5|ultra|wide/i.test(d.label) && /back/i.test(d.label));
         if (normal) deviceId = normal.deviceId;
     }
-
     try {
-        const constraints = {
-            video: {
-                deviceId: deviceId ? { exact: deviceId } : undefined,
-                facingMode: deviceId ? undefined : "environment",
-                width: { ideal: 2560 },
-                height: { ideal: 1920 },
-                aspectRatio: { ideal: 1.333 }
-            },
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: deviceId ? { exact: deviceId } : undefined, facingMode: deviceId ? undefined : "environment", width: { ideal: 2560 }, height: { ideal: 1920 }, aspectRatio: { ideal: 1.333 } },
             audio: false
-        };
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        });
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
-
         const btn = document.getElementById("btn-wide-toggle");
         btn.textContent = isWideActive ? "1x" : "0.5x";
-
     } catch (e) {
         alert("Toggle Wide Failed: " + e.message);
-        isWideActive = !isWideActive; // revert state
+        isWideActive = !isWideActive;
     }
 }
 
 function stopCameraStreamOnly() {
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-    }
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
 }
 
-// ... helper functions ...
+function closeCameraOverlay() { stopCamera(); }
 
-
-// Camera
-
-
-
-// ...
-
-// Old Sync functions removed (replaced by Async versions at bottom)
-
-
-function closeCameraOverlay() {
-    stopCamera();
-}
 function stopCamera() {
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-    }
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
     document.getElementById("camera-overlay").classList.add("hidden");
 }
+
 function capturePhoto() {
     const video = document.getElementById("camera-stream");
     const canvas = document.getElementById("camera-canvas");
@@ -669,24 +477,9 @@ function capturePhoto() {
     const maxWidth = 2560;
     let w = video.videoWidth;
     let h = video.videoHeight;
-
-    // Check if we need to swap dimensions for rotation
-    // If 'currentRotation' is +/- 90 (Landscape) but w < h (Portrait Source), we swap target canvas dims
-    // BUT usually if we are locked in portrait, the video stream is portrait.
-    // So if we detect physical landscape, we want the OUTPUT image to be landscape (swapped).
-
     let isRotated = (Math.abs(currentRotation) === 90);
-
-    // Scale logic
-    let targetW = w;
-    let targetH = h;
-
-    if (isRotated) {
-        // We want final output to be landscape, so width should be the larger dimension
-        // If source is 1920x2560 (portrait), we process as 2560x1920
-        targetW = h;
-        targetH = w;
-    }
+    let targetW = isRotated ? h : w;
+    let targetH = isRotated ? w : h;
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -698,54 +491,11 @@ function capturePhoto() {
     canvas.height = targetH;
     const ctx = canvas.getContext("2d");
 
-    // Apply Rotation
     ctx.save();
-    if (isRotated) {
-        ctx.translate(targetW / 2, targetH / 2);
-        ctx.rotate(currentRotation * Math.PI / 180);
-        // After rotation, we draw image centered. 
-        // If rotated 90 deg:
-        // Canvas is WxH (Landscape). Context rotated 90.
-        // Drawing at -h/2, -w/2 relative to center?
-        // Source is w x h (Portrait).
-        ctx.drawImage(video, -w / 2, -h / 2, w, h); // Draw original size centered
-    } else {
-        ctx.drawImage(video, 0, 0, targetW, targetH);
-    }
-    ctx.restore();
-
-    // Apply WEAKER HDR
-    // We apply filter via temporary canvas or just assume context filter works (it does in modern browsers)
-    // But we already drew it. To apply filter we should have set it before drawImage or use a temp canvas.
-    // Previous code set ctx.filter before draw.
-    // Let's do that properly above.
-    // Actually, handling rotation + filter:
-
-    // Redo utilizing filter:
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-
     if (isRotated) {
         ctx.translate(targetW / 2, targetH / 2);
-        // Correct rotation logic:
-        // If device is rotated 90 deg (Landscape Left), we need to rotate image -90 to be upright relative to device?
-        // No, if device is Landscape, user holds it sideways. The "Top" of the real world is the "Side" of the phone.
-        // We want the saved file to look like the real world.
-        // If phone is portrait (0), image is upright.
-        // If phone is rotated 90 (left side down), the sensor captures "sideways" image relative to sensor, but we want to save it as Landscape.
-        // Actually, if screen is locked to portrait, the camera stream is "Portrait" (upright relative to home button).
-        // If user holds it sideways, the stream shows "Sideways" content.
-        // We need to rotate it so "Top" is Up.
-        // If user rotates -90 (Right side down), we rotate -90?
-
         ctx.rotate(currentRotation * -1 * Math.PI / 180);
-
-        // Check fit
-        // Draw centered
-        // We are drawing a WxH (Portrait) video frame into a HxW (Landscape) canvas.
-        // If we rotate +/- 90, the W/H swap matches.
         ctx.drawImage(video, -w / 2, -h / 2, w, h);
     } else {
         ctx.drawImage(video, 0, 0, targetW, targetH);
@@ -757,12 +507,11 @@ function capturePhoto() {
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
     addWatermark(ctx, canvas, selectedUnit, floorText);
 
-    // Reduced quality
     const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
     savePhoto(dataUrl);
-
     closeCameraOverlay();
 }
+
 function addWatermark(ctx, canvas, unitText, floorText) {
     const fontSize = canvas.width * 0.05;
     ctx.font = `bold ${fontSize}px sans-serif`;
@@ -771,47 +520,29 @@ function addWatermark(ctx, canvas, unitText, floorText) {
     const padding = fontSize * 0.4;
     const lineHeight = fontSize * 1.2;
 
-    // Calculate text lines and box size
     const lines = [dateStr, unitText];
     if (floorText) lines.push(floorText);
 
-    let maxWidth = 0;
-    lines.forEach(line => {
-        const w = ctx.measureText(line).width;
-        if (w > maxWidth) maxWidth = w;
-    });
+    let maxW = 0;
+    lines.forEach(line => { const w = ctx.measureText(line).width; if (w > maxW) maxW = w; });
 
-    const boxWidth = maxWidth + padding * 2;
+    const boxWidth = maxW + padding * 2;
     const boxHeight = lines.length * lineHeight + padding * 2 - (lineHeight - fontSize);
-    const boxX = margin - padding;
-    const boxY = margin - padding;
 
-    // Draw dark background box
     ctx.save();
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+    ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
     ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
     ctx.beginPath();
-    const r = fontSize * 0.3; // border radius
-    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, r);
+    ctx.roundRect(margin - padding, margin - padding, boxWidth, boxHeight, fontSize * 0.3);
     ctx.fill();
     ctx.restore();
 
-    // Draw text
     ctx.fillStyle = "white";
-    ctx.shadowColor = "black";
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetX = 1;
-    ctx.shadowOffsetY = 1;
+    ctx.shadowColor = "black"; ctx.shadowBlur = 2; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 1;
     let yPos = margin + fontSize;
-    lines.forEach(line => {
-        ctx.fillText(line, margin, yPos);
-        yPos += lineHeight;
-    });
+    lines.forEach(line => { ctx.fillText(line, margin, yPos); yPos += lineHeight; });
 }
-// (Functionality moved to IndexedDB section)
+
 function selectPhotoFloor(floor) {
     selectedPhotoFloor = floor;
     document.querySelector("#photo-tab .chip-group").querySelectorAll(".chip").forEach(c => {
@@ -824,7 +555,7 @@ function removePhoto(index) {
     const contractor = getContractor(selectedUnit);
     if (currentReport[contractor] && currentReport[contractor][selectedUnit]) {
         currentReport[contractor][selectedUnit].photos.splice(index, 1);
-        renderPhotoPreview(); // Async now
+        renderPhotoPreview();
         saveLocalData();
     }
 }
@@ -833,13 +564,10 @@ function saveAndClose() {
     const contractor = getContractor(selectedUnit);
     if (!currentReport[contractor]) currentReport[contractor] = {};
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-
-    // Overwrite tasks with current list
     currentReport[contractor][selectedUnit].tasks = currentTaskList.map(t => ({ text: t }));
-
     resetSelection();
     saveLocalData();
-    renderAllReports(); // Update main UI
+    renderAllReports();
 }
 
 function naturalSort(a, b) {
@@ -856,153 +584,93 @@ function copyText(btn, text) {
     textarea.select();
     document.execCommand("copy");
     document.body.removeChild(textarea);
-
     const originalText = btn.innerHTML;
     btn.innerHTML = "✅ Copied!";
     setTimeout(() => btn.innerHTML = originalText, 1500);
 }
 
-// ---------------------------------------------------------
-// INDEXEDDB PERSISTENCE (replaces localStorage for larger storage)
-// ---------------------------------------------------------
-const DB_NAME = "ConstructionLogDB";
-const DB_VERSION = 2; // Incremented for 'images' store
-const DB_STORE = "reports";
-const IMG_STORE = "images";
-
+// =============================================================
+// INDEXEDDB
+// =============================================================
 function openDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (e) => {
             const db = e.target.result;
-            if (!db.objectStoreNames.contains(DB_STORE)) {
-                db.createObjectStore(DB_STORE, { keyPath: "id" });
-            }
-            if (!db.objectStoreNames.contains(IMG_STORE)) {
-                db.createObjectStore(IMG_STORE); // Key = UUID
-            }
+            if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE, { keyPath: "id" });
+            if (!db.objectStoreNames.contains(IMG_STORE)) db.createObjectStore(IMG_STORE);
         };
         request.onsuccess = (e) => resolve(e.target.result);
         request.onerror = (e) => reject(e.target.error);
     });
 }
 
-// Helper to save image blob
 async function saveImageToDB(id, blob) {
     const db = await openDB();
     const tx = db.transaction(IMG_STORE, "readwrite");
-    const store = tx.objectStore(IMG_STORE);
-    store.put(blob, id);
-    return new Promise((resolve, reject) => {
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error);
-    });
+    tx.objectStore(IMG_STORE).put(blob, id);
+    return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
 }
 
-// Helper to get image blob
 async function getImageFromDB(id) {
     const db = await openDB();
     const tx = db.transaction(IMG_STORE, "readonly");
-    const store = tx.objectStore(IMG_STORE);
-    const req = store.get(id);
-    return new Promise((resolve, reject) => {
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-    });
+    const req = tx.objectStore(IMG_STORE).get(id);
+    return new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
 }
 
 async function saveLocalData() {
     try {
         const dateKey = new Date().toISOString().split('T')[0];
-        const payload = {
-            id: STORAGE_KEY,
-            date: dateKey,
-            data: currentReport
-        };
-
+        const payload = { id: STORAGE_KEY, date: dateKey, data: currentReport };
         const db = await openDB();
         const tx = db.transaction(DB_STORE, "readwrite");
-        const store = tx.objectStore(DB_STORE);
-        store.put(payload);
-        await new Promise((resolve, reject) => {
-            tx.oncomplete = resolve;
-            tx.onerror = () => reject(tx.error);
-        });
+        tx.objectStore(DB_STORE).put(payload);
+        await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
         db.close();
-    } catch (e) {
-        console.error("Failed to save data:", e);
-    }
+    } catch (e) { console.error("Failed to save:", e); }
 }
 
 async function loadLocalData() {
     try {
         const db = await openDB();
         const tx = db.transaction(DB_STORE, "readonly");
-        const store = tx.objectStore(DB_STORE);
-        const request = store.get(STORAGE_KEY);
-
-        const result = await new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
+        const request = tx.objectStore(DB_STORE).get(STORAGE_KEY);
+        const result = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
         db.close();
-
         if (result) {
             const todayKey = new Date().toISOString().split('T')[0];
             if (result.date === todayKey) {
                 currentReport = result.data || {};
-                console.log("Data loaded from IndexedDB for today.");
             } else {
-                console.log("New day detected, clearing old data.");
                 currentReport = {};
                 await saveLocalData();
             }
-            return;
         }
-    } catch (e) {
-        console.error("IndexedDB load failed", e);
-    }
+    } catch (e) { console.error("IndexedDB load failed:", e); }
 }
 
-// Auto-save logic remains...
 document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") {
-        if (selectedUnit) syncCurrentUnitData();
-        saveLocalData();
-    }
+    if (document.visibilityState === "hidden") { if (selectedUnit) syncCurrentUnitData(); saveLocalData(); }
 });
-window.addEventListener("beforeunload", () => {
-    if (selectedUnit) syncCurrentUnitData();
-    // No synchronous fallback possible for large binary data
-});
+window.addEventListener("beforeunload", () => { if (selectedUnit) syncCurrentUnitData(); });
 
-// Update Save Photo to use Blob + ID
 function savePhoto(dataUrl) {
-    // Convert dataURL to Blob
     fetch(dataUrl)
         .then(res => res.blob())
         .then(async blob => {
             const id = crypto.randomUUID();
             await saveImageToDB(id, blob);
-
             const contractor = getContractor(selectedUnit);
             if (!currentReport[contractor]) currentReport[contractor] = {};
             if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-
-            // Push reference
-            currentReport[contractor][selectedUnit].photos.push({
-                type: 'db_ref',
-                id: id,
-                timestamp: Date.now()
-            });
-
+            currentReport[contractor][selectedUnit].photos.push({ type: 'db_ref', id: id, timestamp: Date.now() });
             renderPhotoPreview();
             saveLocalData();
         })
-        .catch(err => console.error("Save failed", err));
+        .catch(err => console.error("Save failed:", err));
 }
 
-// Re-write to handle async loading
 async function renderPhotoPreview() {
     const gallery = document.getElementById("preview-gallery");
     gallery.innerHTML = "";
@@ -1010,40 +678,34 @@ async function renderPhotoPreview() {
     if (!currentReport[contractor] || !currentReport[contractor][selectedUnit]) return;
 
     const photos = currentReport[contractor][selectedUnit].photos;
-
     for (let i = 0; i < photos.length; i++) {
         const item = photos[i];
         let src = "";
-
-        if (typeof item === 'string') {
-            // Legacy Base64
-            src = item;
-        } else if (item.type === 'db_ref') {
+        if (typeof item === 'string') src = item;
+        else if (item.type === 'db_ref') {
             const blob = await getImageFromDB(item.id);
             if (blob) src = URL.createObjectURL(blob);
         }
-
         if (!src) continue;
 
         const wrapper = document.createElement("div");
         wrapper.style.cssText = "position:relative; display:inline-block;";
-
         const img = document.createElement("img");
         img.src = src;
         img.className = "preview-img";
-
         const delBtn = document.createElement("button");
         delBtn.textContent = "×";
         delBtn.style.cssText = "position:absolute; top:2px; right:2px; background:rgba(0,0,0,0.7); color:white; border:none; border-radius:50%; width:24px; height:24px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1;";
         delBtn.onclick = () => removePhoto(i);
-
         wrapper.appendChild(img);
         wrapper.appendChild(delBtn);
         gallery.appendChild(wrapper);
     }
 }
 
-// Updated Render Reports (Async)
+// =============================================================
+// REPORTS
+// =============================================================
 async function renderAllReports() {
     const container = document.getElementById("reports-container");
     container.innerHTML = "";
@@ -1055,8 +717,7 @@ async function renderAllReports() {
     }
 
     for (const contractor of activeContractors) {
-        const { text, photoData } = await generateContractorReportDataAsync(contractor);
-
+        const { text, photoData } = await generateContractorReportData(contractor);
         const card = document.createElement("div");
         card.className = "report-card";
         card.style.borderLeftColor = getContractorColor(contractor);
@@ -1064,7 +725,7 @@ async function renderAllReports() {
         let imagesHtml = `<div class="preview-gallery">`;
         if (photoData) {
             photoData.forEach((item, idx) => {
-                const url = item.url; // Blob URL
+                const url = item.url;
                 const unit = item.unit;
                 const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
                 const filename = `${dateStr}_${unit}_${idx + 1}.jpg`;
@@ -1074,15 +735,11 @@ async function renderAllReports() {
         imagesHtml += `</div>`;
 
         card.innerHTML = `
-            <div class="report-header">
-                <h3>${contractor}</h3>
-            </div>
+            <div class="report-header"><h3>${contractor}</h3></div>
             <div class="report-content">${text}</div>
-            
-            <div class="action-row" style="display:flex; gap:10px; margin-top:10px;">
-                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">
-                    📋 Copy Text
-                </button>
+            <div class="action-row" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
+                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">📋 Copy Text</button>
+                <button class="copy-btn" onclick="shareToWhatsApp('${contractor}')" style="background:#25D366; color:white;">💬 Share to WA</button>
             </div>
             <div style="margin-top:10px">${imagesHtml}</div>
         `;
@@ -1090,33 +747,26 @@ async function renderAllReports() {
     }
 }
 
-// Updated Generation Logic
-async function generateContractorReportDataAsync(contractor) {
+async function generateContractorReportData(contractor) {
     const data = currentReport[contractor];
-    let units = Object.keys(data).sort(naturalSort);
+    const units = Object.keys(data).sort(naturalSort);
     let allPhotoData = [];
     let body = "";
 
     for (const unit of units) {
         const unitData = data[unit];
-
-        // Resolve images
-        for (let photo of unitData.photos) {
+        for (const photo of unitData.photos) {
             let url = "";
-            if (typeof photo === 'string') {
-                url = photo;
-            } else if (photo.type === 'db_ref') {
+            if (typeof photo === 'string') url = photo;
+            else if (photo.type === 'db_ref') {
                 const blob = await getImageFromDB(photo.id);
                 if (blob) url = URL.createObjectURL(blob);
             }
-            if (url) allPhotoData.push({ url: url, unit: unit });
+            if (url) allPhotoData.push({ url, unit });
         }
-
         if (unitData.tasks.length > 0) {
             body += `${unit}:\n`;
-            unitData.tasks.forEach(t => {
-                body += `-${t.text}\n`;
-            });
+            unitData.tasks.forEach(t => { body += `-${t.text}\n`; });
             body += `\n`;
         }
     }
@@ -1125,12 +775,8 @@ async function generateContractorReportDataAsync(contractor) {
     return { text: fullText, photoData: allPhotoData };
 }
 
-// Note: generateContractorReportData (sync) is deprecated but kept if needed for non-image logic.
-// We replace original shareToWhatsApp to use new async generator.
-
 async function shareToWhatsApp(contractor) {
-    const { text, photoData } = await generateContractorReportDataAsync(contractor);
-
+    const { text, photoData } = await generateContractorReportData(contractor);
     const files = [];
     for (let i = 0; i < photoData.length; i++) {
         try {
@@ -1138,23 +784,14 @@ async function shareToWhatsApp(contractor) {
             const blob = await res.blob();
             const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
             const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-            const file = new File([blob], filename, { type: 'image/jpeg' });
-            files.push(file);
-        } catch (e) {
-            console.error('Failed to convert photo', e);
-        }
+            files.push(new File([blob], filename, { type: 'image/jpeg' }));
+        } catch (e) { console.error('Photo convert failed:', e); }
     }
 
     if (navigator.share) {
-        const shareData = {
-            title: 'Construction Report',
-            text: text
-        };
-        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
-            shareData.files = files;
-        }
+        const shareData = { title: 'Construction Report', text };
+        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) shareData.files = files;
         try { await navigator.share(shareData); return; } catch (err) { }
     }
-    const encoded = encodeURIComponent(text);
-    window.open(`https://wa.me/?text=${encoded}`, '_blank');
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
 }
