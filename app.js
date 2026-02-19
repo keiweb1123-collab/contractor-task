@@ -399,13 +399,14 @@ async function startCamera() {
         if (cameraDevices.length === 0) {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
+            populateCameraSelect(); // Populate dropdown
 
             // Try to find ULTRA wide angle camera (0.5x)
-            // Keywords: "0.5", "ultra", "wide". 
+            // Keywords: "0.5", "ultra", "wide".
             // Often back camera ID 2 or similar on phones.
             // We prioritize finding one that isn't the current one.
             const ultraWideIdx = cameraDevices.findIndex(d =>
-                /0\.5|ultra|wide/i.test(d.label) ||
+                /0\.5|ultra|wide|back 0/i.test(d.label) ||
                 (d.getCapabilities && d.getCapabilities().zoom?.min < 1) // logical check if available
             );
 
@@ -422,13 +423,64 @@ async function startCamera() {
                     },
                     audio: false
                 };
-                cameraStream = await navigator.mediaDevices.getUserMedia(wideConstraints);
-                video.srcObject = cameraStream;
+                try {
+                    cameraStream = await navigator.mediaDevices.getUserMedia(wideConstraints);
+                    video.srcObject = cameraStream;
+                    document.getElementById("camera-select").value = currentDeviceIndex; // Sync dropdown
+                } catch (e) { console.error("Ultra wide failed", e); }
             }
         }
+
+        // ... (zoom logic) ...
+        try {
+            // Zoom logic...
+        } catch (e) { }
+
     } catch (err) {
         console.error(err);
         alert("Camera Error: " + err.message);
+    }
+}
+
+function populateCameraSelect() {
+    const select = document.getElementById("camera-select");
+    select.innerHTML = "";
+    cameraDevices.forEach((device, index) => {
+        const option = document.createElement("option");
+        option.value = index;
+        option.text = device.label || `Camera ${index + 1}`;
+        select.appendChild(option);
+    });
+    select.value = currentDeviceIndex;
+}
+
+async function manualSelectCamera() {
+    const select = document.getElementById("camera-select");
+    const idx = parseInt(select.value);
+    if (isNaN(idx)) return;
+
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+    }
+    currentDeviceIndex = idx;
+
+    const constraints = {
+        video: {
+            deviceId: { exact: cameraDevices[currentDeviceIndex].deviceId },
+            aspectRatio: { ideal: 1.333 },
+            width: { ideal: 1920 },
+            height: { ideal: 1440 }
+        },
+        audio: false
+    };
+
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const video = document.getElementById("camera-stream");
+        video.srcObject = cameraStream;
+    } catch (err) {
+        alert("Failed to switch: " + err.message);
     }
 }
 
@@ -442,6 +494,10 @@ async function switchCamera() {
     cameraStream.getTracks().forEach(track => track.stop());
     cameraStream = null;
     currentDeviceIndex = (currentDeviceIndex + 1) % cameraDevices.length;
+
+    // Sync Dropdown
+    const select = document.getElementById("camera-select");
+    if (select) select.value = currentDeviceIndex;
 
     try {
         const constraints = {
