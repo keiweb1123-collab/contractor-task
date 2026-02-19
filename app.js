@@ -1,1173 +1,220 @@
-// Main JS - V3
-// Data Configuration
-const units = [
-    "Unit1", "Unit2", "Unit3A", "Unit3B", "Unit5", "Unit6", "Unit7",
-    "Unit8", "Unit9", "Unit10", "Unit11", "Unit12A", "Unit12B",
-    "Unit14", "Unit15", "Unit16", "Unit17", "Unit18", "Unit19"
-];
-
-const assignments = {
-    "IADECCO": ["Unit1", "Unit8", "Unit9", "Unit10", "Unit11", "Unit14", "Unit15"],
-    "YAMATO": ["Unit2", "Unit3A", "Unit12A", "Unit12B", "Unit16", "Unit17", "Unit18", "Unit19"],
-    "INITI INDAH": ["Unit3B", "Unit5", "Unit6", "Unit7"]
-};
-
-// ... (skipping unchanged parts) ...
-
-function generateContractorReportData(contractor) {
-    const data = currentReport[contractor];
-    let units = Object.keys(data).sort(naturalSort);
-    let allPhotoUrls = [];
-    let body = "";
-
-    units.forEach(unit => {
-        const unitData = data[unit];
-        allPhotoUrls = allPhotoUrls.concat(unitData.photos);
-
-        if (unitData.tasks.length > 0) {
-            body += `${unit}\n`; // Unit Name on new line
-            unitData.tasks.forEach(t => {
-                body += `${t.text}\n`; // Task on new line (no bullet for cleaner copy)
-            });
-            body += `\n`; // Empty line between units
-        }
-    });
-
-    const fullText = `${contractor}\n\n${body}`.trim(); // Contractor Name + 2 newlines
-    return { text: fullText, photoUrls: allPhotoUrls };
-}
-
-// State
-let currentReport = {};
-let selectedUnit = null;
-let currentTaskList = [];
-let selectedPhotoFloor = null;
-let cameraStream = null;
-let pendingOptions = new Set(); // For multi-select in modal
-let pendingTaskName = "";
-let pendingTaskCategory = "";
-// Camera
-let cameraDevices = [];
-let currentDeviceIndex = 0;
-let normalCameraIndex = -1;
-let wideCameraIndex = -1;
-let isWideActive = false;
-let currentFacingMode = "environment";
-
-const STORAGE_KEY = "construction_log_data";
-
-document.addEventListener("DOMContentLoaded", async () => {
-    await loadLocalData();
-    initGrid();
-    renderAllReports();
-});
-
-// Init
-function initGrid() {
-    const grid = document.getElementById("unit-grid");
-    grid.innerHTML = "";
-    units.forEach(unit => {
-        const contractor = getContractor(unit);
-        const btn = document.createElement("button");
-        btn.className = "unit-btn";
-        // Modern Pop Style HTML
-        btn.innerHTML = `<strong>${unit}</strong> <span>${contractor === "Unassigned" ? "" : contractor.substring(0, 3)}</span>`;
-        btn.style.backgroundColor = getContractorColor(contractor);
-        btn.onclick = () => openInput(unit, contractor);
-        grid.appendChild(btn);
-    });
-}
-function getContractor(unit) {
-    for (const [contractor, unitList] of Object.entries(assignments)) {
-        if (unitList.includes(unit)) return contractor;
-    }
-    return "Unassigned";
-}
-function getContractorColor(contractor) {
-    switch (contractor) {
-        case "IADECCO": return "var(--color-iadecco)"; // Red
-        case "YAMATO": return "var(--color-yamato)";   // Blue
-        case "INITI INDAH": return "var(--color-initi)"; // Green
-        default: return "var(--color-unassigned)";
-    }
-}
-
-// UI Opening
-function openInput(unit, contractor) {
-    selectedUnit = unit;
-    selectedPhotoFloor = null;
-
-    // Load existing tasks if any, or start clean
-    if (currentReport[contractor] && currentReport[contractor][unit]) {
-        // Clone to avoid reference issues
-        currentTaskList = [...currentReport[contractor][unit].tasks.map(t => t.text)];
-    } else {
-        currentTaskList = [];
-    }
-
-    // Full screen Overlay
-    document.body.style.overflow = "hidden"; // Prevent background scroll
-    document.getElementById("input-section").classList.remove("hidden");
-
-    document.getElementById("selected-unit-display").textContent = unit;
-    // Badge removed
-
-    // Reset contents
-    document.getElementById("preview-gallery").innerHTML = "";
-    document.querySelectorAll(".chip").forEach(c => c.classList.remove("selected"));
-    document.getElementById("custom-task-input").value = "";
-    renderTaskList();
-    updateTaskCount();
-
-    // Load existing photos for preview
-    renderPhotoPreview();
-
-    switchTab('photo');
-}
-
-function resetSelection() {
-    document.body.style.overflow = "auto";
-    document.getElementById("input-section").classList.add("hidden");
-
-    // Hard reset of all temporary state
-    selectedUnit = null;
-    currentTaskList = [];
-    pendingOptions.clear();
-    pendingTaskName = "";
-    document.getElementById("custom-task-input").value = "";
-    document.getElementById("task-list-display").innerHTML = ""; // Visually clear immediately
-
-    stopCamera();
-    renderAllReports();
-}
-
-// ... (skip unchanged) ...
-
-// ---------------------------------------------------------
-// SAVING & REPORTING
-// ---------------------------------------------------------
-// [Deleted duplicate saveAndClose function from here]
-
-function switchTab(tab) {
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach(c => c.classList.add("hidden"));
-
-    if (tab === 'photo') {
-        document.querySelector(".tab-btn:nth-child(1)").classList.add("active");
-        document.getElementById("photo-tab").classList.remove("hidden");
-    } else {
-        document.querySelector(".tab-btn:nth-child(2)").classList.add("active");
-        document.getElementById("task-tab").classList.remove("hidden");
-        stopCamera();
-    }
-}
-
-// ---------------------------------------------------------
-// SMART TASK MODAL (MULTI-SELECT)
-// ---------------------------------------------------------
-function openTaskOption(taskName, type) {
-    pendingTaskName = taskName;
-    pendingTaskCategory = type;
-    pendingOptions.clear();
-
-    const modal = document.getElementById("option-modal");
-    const grid = document.getElementById("modal-options");
-    const title = document.getElementById("modal-title");
-    grid.innerHTML = "";
-
-    let options = [];
-    if (type === 'floor' || type === 'floor_lift_rebar') options = ["GF", "1F", "2F", "3F", "RF"];
-    else if (type === 'floor_lift_gf') options = ["GF", "1F", "2F", "3F", "RF", "Lift"];
-    else if (type === 'floor_lift') options = ["1F", "2F", "3F", "RF", "Lift"];
-    else if (type === 'excavation_targets') options = ["Pile cap", "Retaining wall", "Septic tank", "Ground tank"];
-    else if (type === 'rebar_struct_targets') options = ["Pile cap", "Retaining wall", "Beam", "Slab", "Column"];
-    else if (type === 'rebar_fab_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column"];
-    else if (type === 'casting_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Car port slope"];
-    else if (type === 'formwork_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column"];
-    else if (type === 'demolishing_targets') options = ["Beam", "Slab", "Retaining wall", "Column"];
-    else if (type === 'lean_concrete_targets') options = ["Retaining wall", "Beam", "Pile cap", "Slab"];
-
-    title.textContent = `${taskName} for...`;
-
-    options.forEach(opt => {
-        const btn = document.createElement("button");
-        btn.className = "modal-option-btn";
-        btn.textContent = opt;
-        btn.onclick = () => toggleOption(btn, opt);
-        grid.appendChild(btn);
-    });
-
-    modal.classList.remove("hidden");
-
-    // Add click listener to background
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            closeModal();
-        }
-    };
-}
-
-function toggleOption(btn, value) {
-    if (pendingOptions.has(value)) {
-        pendingOptions.delete(value);
-        btn.classList.remove("selected");
-    } else {
-        pendingOptions.add(value);
-        btn.classList.add("selected");
-    }
-}
-
-function confirmModalSelection() {
-    if (pendingOptions.size === 0) {
-        closeModal();
-        return;
-    }
-
-    const selectedArray = Array.from(pendingOptions);
-    const joinedSelection = selectedArray.join(", "); // "GF, 1F"
-
-    // 2-Step Flow for Rebar (Struct), Casting, Form work, Demolishing
-    if (pendingTaskCategory === 'rebar_struct_targets' || pendingTaskCategory === 'casting_targets' || pendingTaskCategory === 'formwork_targets' || pendingTaskCategory === 'demolishing_targets') {
-        // Step 2: Now ask for floor for these items
-        if (pendingTaskCategory === 'casting_targets') {
-            pendingTaskName = `Casting concrete for ${joinedSelection}`;
-        } else if (pendingTaskCategory === 'formwork_targets') {
-            pendingTaskName = `Form work installation for ${joinedSelection}`;
-        } else if (pendingTaskCategory === 'demolishing_targets') {
-            pendingTaskName = `Demolishing formwork for ${joinedSelection}`;
-        } else {
-            pendingTaskName = `Rebar Installation for ${joinedSelection}`;
-        }
-
-        pendingTaskCategory = 'floor_lift_rebar'; // Reuse existing floor options
-
-        // Clear modal for Step 2
-        pendingOptions.clear();
-        const grid = document.getElementById("modal-options");
-        const title = document.getElementById("modal-title");
-        grid.innerHTML = "";
-        title.textContent = `${pendingTaskName} on...`;
-
-        ["GF", "1F", "2F", "3F", "RF"].forEach(f => {
-            const btn = document.createElement("button");
-            btn.className = "modal-option-btn";
-            btn.textContent = f;
-            btn.onclick = () => toggleOption(btn, f);
-            grid.appendChild(btn);
-        });
-        return; // Don't close, wait for floor selection
-    }
-
-    // Single-step target flows (no floor selection)
-    if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets') {
-        let prefix;
-        if (pendingTaskCategory === 'lean_concrete_targets') {
-            prefix = 'Lean concrete for';
-        } else if (pendingTaskCategory === 'rebar_fab_targets') {
-            prefix = 'Rebar fabrication for';
-        } else {
-            prefix = `${pendingTaskName} for`;
-        }
-        addTaskDirect(`${prefix} ${joinedSelection}`);
-        closeModal();
-        return;
-    }
-
-    // Default text generation
-    let finalText = "";
-    if (pendingTaskCategory.includes('floor')) {
-        finalText = `${pendingTaskName} on ${joinedSelection}`;
-    } else {
-        finalText = `${pendingTaskName} for ${joinedSelection}`;
-    }
-
-    addTaskDirect(finalText);
-    closeModal();
-}
-
-function closeModal() {
-    document.getElementById("option-modal").classList.add("hidden");
-}
-
-// ---------------------------------------------------------
-// TASK LIST MANAGEMENT
-// ---------------------------------------------------------
-function addTaskDirect(text) {
-    currentTaskList.push(text);
-    renderTaskList();
-    updateTaskCount();
-    // Aggressive Save
-    syncCurrentUnitData();
-    saveLocalData();
-}
-
-function addCustomTask() {
-    const input = document.getElementById("custom-task-input");
-    const val = input.value.trim();
-    if (val) {
-        addTaskDirect(val);
-        input.value = "";
-    }
-}
-
-function removeTask(index) {
-    currentTaskList.splice(index, 1);
-    renderTaskList();
-    updateTaskCount();
-    // Aggressive Save
-    syncCurrentUnitData();
-    saveLocalData();
-}
-
-function syncCurrentUnitData() {
-    if (!selectedUnit) return;
-    const contractor = getContractor(selectedUnit);
-    if (!currentReport[contractor]) currentReport[contractor] = {};
-    if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-
-    // Preserve photos, update tasks
-    const existingPhotos = currentReport[contractor][selectedUnit].photos;
-    currentReport[contractor][selectedUnit] = {
-        tasks: currentTaskList.map(t => ({ text: t })),
-        photos: existingPhotos
-    };
-}
-
-function renderTaskList() {
-    const display = document.getElementById("task-list-display");
-    display.innerHTML = "";
-
-    if (currentTaskList.length === 0) {
-        display.innerHTML = '<p class="empty-msg">No tasks yet.</p>';
-        return;
-    }
-
-    currentTaskList.forEach((task, index) => {
-        const div = document.createElement("div");
-        div.className = "task-item-removable";
-        div.innerHTML = `<span>• ${task}</span> <button onclick="removeTask(${index})">×</button>`;
-        display.appendChild(div);
-    });
-}
-
-function updateTaskCount() {
-    document.getElementById("task-count").textContent = currentTaskList.length;
-}
-
-// ---------------------------------------------------------
-// CAMERA
-// ---------------------------------------------------------
-// Camera State (Moved to top of file or already declared)
-// We already declared these at the top:
-// let cameraDevices = [];
-// let currentDeviceIndex = 0;
-// But now we added new ones efficiently.
-// Let's just ensure we don't redeclare them here if they are already at top.
-// The previous edit added them at line 353, but they were ALSO at line 50.
-// I will remove the ONES AT line 353/357 and rely on the ones at the top, 
-// OR consolidate them. 
-
-// Actually, I will just remove the re-declarations I added in the previous step
-// and ensure the new variables (normalCameraIndex, etc) are declared once at the top.
-
-// Wait, I can't see the top right now easily without view_file, but the error says line 50.
-// So I should remove them from line 357.
-
-// Camera
-async function startCamera() {
-    if (cameraStream) return;
-    try {
-        const baseConstraints = {
-            aspectRatio: { ideal: 1.333 },
-            width: { ideal: 2560 },
-            height: { ideal: 1920 }
-        };
-
-        // Initial launch - try specific device if known, else facingMode
-        let constraints = {
-            video: {
-                facingMode: { ideal: "environment" },
-                ...baseConstraints
-            },
-            audio: false
-        };
-
-        try {
-            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (initialErr) {
-            console.warn("High-res constraints failed, trying basic.", initialErr);
-            // Fallback: Remove resolution constraints, keep facing mode
-            constraints = {
-                video: {
-                    facingMode: "environment"
-                },
-                audio: false
-            };
-            try {
-                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            } catch (fallbackErr) {
-                // Last resort: Any video
-                console.warn("Environment facing failed, trying any video.", fallbackErr);
-                cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            }
-        }
-
-        const video = document.getElementById("camera-stream");
-        video.srcObject = cameraStream;
-
-        // Apply WEAKER HDR (Further reduced by 10%)
-        // New: contrast(1.005) saturate(1.01) brightness(1.002)
-        video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-
-        document.getElementById("camera-overlay").classList.remove("hidden");
-
-        // Enumerate and Identify Cameras
-        if (cameraDevices.length === 0) {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            cameraDevices = devices.filter(d => d.kind === 'videoinput');
-            populateCameraSelect();
-
-            // Identify Normal vs Wide for Back Camera
-            // Usually Back 0 is main, Back 1 is wide? or based on labels.
-            // Let's assume current one is "Normal" if we started with "environment"
-
-            // Find current track settings
-            const track = cameraStream.getVideoTracks()[0];
-            const settings = track.getSettings();
-
-            // Re-scan devices to match current
-            const currentId = settings.deviceId;
-            const currentIdx = cameraDevices.findIndex(d => d.deviceId === currentId);
-            if (currentIdx >= 0) normalCameraIndex = currentIdx;
-
-            // Find Wide Index
-            wideCameraIndex = cameraDevices.findIndex(d =>
-                (/0\.5|ultra|wide/i.test(d.label)) && d.deviceId !== currentId
-            );
-
-            const btnWide = document.getElementById("btn-wide-toggle");
-            if (wideCameraIndex >= 0 && normalCameraIndex >= 0) {
-                btnWide.classList.remove("hidden");
-                btnWide.textContent = "0.5x";
-            } else {
-                btnWide.classList.add("hidden");
-            }
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Camera Error: " + err.message);
-    }
-}
-
-async function switchCameraFace() {
-    if (!cameraStream) return;
-    stopCameraStreamOnly();
-
-    // Toggle facing mode
-    currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
-
-    // If switching to user, hide wide button
-    const btnWide = document.getElementById("btn-wide-toggle");
-    if (currentFacingMode === "user") btnWide.classList.add("hidden");
-
-    // Reset indices check when switching face
-    // For simplicity, just request facingMode and let browser pick
-    try {
-        const constraints = {
-            video: {
-                facingMode: { exact: currentFacingMode },
-                width: { ideal: 2560 },
-                height: { ideal: 1920 },
-                aspectRatio: { ideal: 1.333 }
-            },
-            audio: false
-        };
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        const video = document.getElementById("camera-stream");
-        video.srcObject = cameraStream;
-
-        // Re-evaluate wide availability if back
-        if (currentFacingMode === "environment") {
-            // We might need to re-find normal/wide indices if they changed IDs (unlikely but safe)
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            cameraDevices = devices.filter(d => d.kind === 'videoinput');
-            // Attempt to find wide again
-            wideCameraIndex = cameraDevices.findIndex(d => /0\.5|ultra|wide/i.test(d.label));
-            if (wideCameraIndex >= 0) {
-                btnWide.classList.remove("hidden");
-                btnWide.textContent = "0.5x";
-                isWideActive = false;
-            }
-        }
-
-    } catch (err) {
-        // Fallback to ideal if exact fails
-        try {
-            const constraints = {
-                video: {
-                    facingMode: { ideal: currentFacingMode },
-                    width: { ideal: 2560 },
-                    height: { ideal: 1920 },
-                    aspectRatio: { ideal: 1.333 }
-                },
-                audio: false
-            };
-            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            const video = document.getElementById("camera-stream");
-            video.srcObject = cameraStream;
-        } catch (e) {
-            alert("Camera Switch Failed: " + e.message);
-        }
-    }
-}
-
-async function toggleWideMode() {
-    if (!cameraStream) return;
-    if (wideCameraIndex === -1) return;
-
-    stopCameraStreamOnly();
-
-    isWideActive = !isWideActive;
-    const targetIdx = isWideActive ? wideCameraIndex : normalCameraIndex;
-    // If normal index invalid, fallback to default logic? 
-    // Actually if we found wide, we must have found normal as "not wide".
-    // If normalCameraIndex IS -1 (unknown), we might just rely on enumerate excluding current wide?
-    // Let's rely on stored IDs.
-
-    let deviceId = cameraDevices[targetIdx]?.deviceId;
-
-    // IF we don't have a specific ID for normal (e.g. first launch), try to find it again
-    if (!deviceId && !isWideActive) {
-        // Just request environment again?
-        // Or find the one that ISN'T wide
-        const normal = cameraDevices.find(d => !/0\.5|ultra|wide/i.test(d.label) && /back/i.test(d.label));
-        if (normal) deviceId = normal.deviceId;
-    }
-
-    try {
-        const constraints = {
-            video: {
-                deviceId: deviceId ? { exact: deviceId } : undefined,
-                facingMode: deviceId ? undefined : "environment",
-                width: { ideal: 2560 },
-                height: { ideal: 1920 },
-                aspectRatio: { ideal: 1.333 }
-            },
-            audio: false
-        };
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        const video = document.getElementById("camera-stream");
-        video.srcObject = cameraStream;
-
-        const btn = document.getElementById("btn-wide-toggle");
-        btn.textContent = isWideActive ? "1x" : "0.5x";
-
-    } catch (e) {
-        alert("Toggle Wide Failed: " + e.message);
-        isWideActive = !isWideActive; // revert state
-    }
-}
-
-function stopCameraStreamOnly() {
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-    }
-}
-
-// ... helper functions ...
-
-function capturePhoto() {
-    const video = document.getElementById("camera-stream");
-    const canvas = document.getElementById("camera-canvas");
-    if (!cameraStream) return;
-
-    // Limit photo size
-    const maxWidth = 2560;
-    let w = video.videoWidth;
-    let h = video.videoHeight;
-
-    if (w > maxWidth) {
-        const scale = maxWidth / w;
-        w = maxWidth;
-        h = Math.round(h * scale);
-    }
-
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-
-    // Apply WEAKER HDR (Further reduced by 10% - virtually natural)
-    ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
-    ctx.drawImage(video, 0, 0, w, h);
-    ctx.filter = "none";
-
-    const includeFloor = document.getElementById("watermark-floor-check").checked;
-    const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
-    addWatermark(ctx, canvas, selectedUnit, floorText);
-
-    // Reduced quality to 0.5 for lighter files without resolution loss
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
-    savePhoto(dataUrl);
-
-    closeCameraOverlay();
-}
-
-// ...
-
-function renderAllReports() {
-    const container = document.getElementById("reports-container");
-    container.innerHTML = "";
-    const activeContractors = Object.keys(currentReport);
-
-    if (activeContractors.length === 0) {
-        container.innerHTML = `<p style="text-align:center; color:#94a3b8; margin-top:20px;">No reports yet.</p>`;
-        return;
-    }
-
-    activeContractors.forEach(contractor => {
-        const { text, photoData } = generateContractorReportData(contractor); // Expect photoData objects
-        const card = document.createElement("div");
-        card.className = "report-card";
-        card.style.borderLeftColor = getContractorColor(contractor);
-
-        let imagesHtml = `<div class="preview-gallery">`;
-        if (photoData) {
-            // Group by Unit for filename ordering visual
-            photoData.forEach((item, idx) => {
-                const url = item.url;
-                const unit = item.unit;
-                const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
-                // Filename: DATE_UNIT_IDX.jpg
-                const filename = `${dateStr}_${unit}_${idx + 1}.jpg`;
-                imagesHtml += `<a href="${url}" download="${filename}"><img src="${url}" class="preview-img"></a>`;
-            });
-        }
-        imagesHtml += `</div>`;
-
-        card.innerHTML = `
-            <div class="report-header">
-                <h3>${contractor}</h3>
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <title>One-Tap Reporter</title>
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+
+    <link rel="stylesheet" href="style.css?v=2">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+</head>
+<!-- ... -->
+<!-- PWA Install Prompt Logic could go here -->
+<script src="app.js?v=18"></script>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>CONSTRUCTION LOG</h1>
+            <p>One-Tap Daily Reporting</p>
+        </header>
+
+        <!-- Unit Selection Grid -->
+        <div id="unit-grid" class="grid-container">
+            <!-- Units generated by JS -->
+        </div>
+
+        <!-- Input Section -->
+        <div id="input-section" class="hidden input-card-fullscreen">
+            <div class="sticky-header">
+                <div>
+                    <h2 id="selected-unit-display" style="font-weight:900; font-size:1.4rem;">Unit 1</h2>
+                </div>
+                <button class="close-btn" onclick="resetSelection()">✕</button>
             </div>
-            <div class="report-content">${text}</div>
-            
-            <div class="action-row" style="display:flex; gap:10px; margin-top:10px;">
-                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">
-                    📋 Copy Text
-                </button>
+
+            <!-- Tab Switching -->
+            <div class="sticky-tabs">
+                <div class="tab-container">
+                    <button class="tab-btn active" onclick="switchTab('photo')">📷 Camera</button>
+                    <button class="tab-btn" onclick="switchTab('task')">📝 Tasks (<span
+                            id="task-count">0</span>)</button>
+                </div>
             </div>
-            <div style="margin-top:10px">${imagesHtml}</div>
-        `;
-        container.appendChild(card);
-    });
-}
-// Note: Updated shareToWhatsApp to handle new struct if needed? 
-// For now, let's just make generateContractorReportData return compatible structure.
 
-function generateContractorReportData(contractor) {
-    const data = currentReport[contractor];
-    let units = Object.keys(data).sort(naturalSort);
-    let allPhotoData = []; // Changed from allPhotoUrls
-    let body = "";
+            <div class="scrollable-content">
+                <!-- PHOTO TAB -->
+                <div id="photo-tab" class="tab-content">
+                    <div class="form-group">
+                        <span class="label">Watermark Options</span>
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                            <input type="checkbox" id="watermark-floor-check" style="width:20px; height:20px;">
+                            <label for="watermark-floor-check" style="font-weight:600; color:#374151;">Include Floor
+                                Text</label>
+                        </div>
+                        <div class="chip-group small" id="photo-floor-options">
+                            <button class="chip" onclick="selectPhotoFloor('Building')">Building</button>
+                            <button class="chip" onclick="selectPhotoFloor('GF')">GF</button>
+                            <button class="chip" onclick="selectPhotoFloor('1F')">1F</button>
+                            <button class="chip" onclick="selectPhotoFloor('2F')">2F</button>
+                            <button class="chip" onclick="selectPhotoFloor('3F')">3F</button>
+                            <button class="chip" onclick="selectPhotoFloor('RF')">RF</button>
+                        </div>
+                    </div>
 
-    units.forEach(unit => {
-        const unitData = data[unit];
-        // Store visual data
-        unitData.photos.forEach(url => {
-            allPhotoData.push({ url: url, unit: unit });
-        });
+                    <!-- Camera Start Button -->
+                    <div style="text-align:center; margin-bottom:16px;">
+                        <button id="start-camera-btn"
+                            style="background:white; color:#111; padding:12px 20px; border-radius:99px; font-weight:700; border:none; box-shadow:0 2px 8px rgba(0,0,0,0.1);"
+                            onclick="startCamera()">📷 Open Camera</button>
+                    </div>
 
-        if (unitData.tasks.length > 0) {
-            body += `${unit}:\n`;
-            unitData.tasks.forEach(t => {
-                body += `-${t.text}\n`;
-            });
-            body += `\n`;
-        }
-    });
+                    <!-- Preview Gallery -->
+                    <div id="preview-gallery" class="preview-gallery" style="margin-top:10px;"></div>
+                </div>
 
-    const fullText = `${contractor}\n${body}`.trim();
-    // Return both formats if needed, or just new one
-    // Existing shareToWhatsApp expects photoUrls as string array?
-    // Let's refactor shareToWhatsApp to extract URLs.
-    return { text: fullText, photoData: allPhotoData };
-}
+                <!-- FULLSCREEN CAMERA OVERLAY -->
+                <div id="camera-overlay" class="hidden"
+                    style="position:fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:5000; display:flex; flex-direction:column;">
+                    <video id="camera-stream" autoplay playsinline muted
+                        style="flex:1; width:100%; height:100%; object-fit:contain;"></video>
+                    <canvas id="camera-canvas" class="hidden"></canvas>
 
-async function shareToWhatsApp(contractor) {
-    const { text, photoData } = generateContractorReportData(contractor);
-    const photoUrls = photoData.map(p => p.url); // Extract URLs for compatibility
+                    <!-- Close Button (top-left) -->
+                    <button onclick="closeCameraOverlay()"
+                        style="position:absolute; top:16px; left:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:22px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">✕</button>
 
-    // ... existing share logic ...
-    // Convert dataURLs to File objects
-    const files = [];
-    for (let i = 0; i < photoData.length; i++) {
-        try {
-            const res = await fetch(photoData[i].url);
-            const blob = await res.blob();
-            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            // Unit specific filename in share
-            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-            const file = new File([blob], filename, { type: 'image/jpeg' });
-            files.push(file);
-        } catch (e) {
-            console.error('Failed to convert photo', e);
-        }
-    }
+                    <!-- Camera Selection Dropdown -->
+                    <div style="position:absolute; top:70px; left:16px; z-index:5010;">
+                        <select id="camera-select" onchange="manualSelectCamera()"
+                            style="background:rgba(0,0,0,0.6); color:white; border:1px solid #666; padding:8px; border-radius:8px; font-size:14px; max-width:200px;">
+                            <option value="">Auto Select</option>
+                        </select>
+                    </div>
 
-    // ... rest of share ...
-    if (navigator.share) {
-        const shareData = {
-            title: 'Construction Report',
-            text: text
-        };
-        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
-            shareData.files = files;
-        }
-        try { await navigator.share(shareData); return; } catch (err) { }
-    }
-    const encoded = encodeURIComponent(text);
-    window.open(`https://wa.me/?text=${encoded}`, '_blank');
-}
+                    <!-- Bottom Controls -->
+                    <div class="camera-controls-bottom">
 
-function closeCameraOverlay() {
-    stopCamera();
-}
-function stopCamera() {
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-    }
-    document.getElementById("camera-overlay").classList.add("hidden");
-}
-function capturePhoto() {
-    const video = document.getElementById("camera-stream");
-    const canvas = document.getElementById("camera-canvas");
-    if (!cameraStream) return;
+                        <!-- Front/Back Switch -->
+                        <button onclick="switchCameraFace()" class="camera-side-btn"
+                            style="background:rgba(255,255,255,0.2); backdrop-filter:blur(5px); border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; border:none; color:white; font-size:20px;">🔄</button>
 
-    // Limit photo size
-    const maxWidth = 2560;
-    let w = video.videoWidth;
-    let h = video.videoHeight;
+                        <button class="btn-shutter" onclick="capturePhoto()"></button>
 
-    // Ensure we process with correct aspect ratio if the stream doesn't match
-    // But usually we just take the stream size.
+                        <!-- Wide/Normal Toggle (hidden if not available) -->
+                        <button id="btn-wide-toggle" onclick="toggleWideMode()" class="camera-side-btn hidden"
+                            style="background:rgba(255,255,255,0.2); backdrop-filter:blur(5px); border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; border:none; color:white; font-size:14px; font-weight:700;">1x</button>
+                    </div>
+                </div>
 
-    if (w > maxWidth) {
-        const scale = maxWidth / w;
-        w = maxWidth;
-        h = Math.round(h * scale);
-    }
+                <!-- TASK TAB -->
+                <div id="task-tab" class="tab-content hidden">
+                    <div class="form-group">
+                        <span class="label">Current Tasks</span>
+                        <div id="task-list-display" class="task-list-display">
+                            <p class="empty-msg">No tasks yet.</p>
+                        </div>
 
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
+                        <div class="separator" style="margin-top: 0">Structure</div>
+                        <div class="task-grid">
+                            <button class="task-btn" onclick="openTaskOption('Excavation', 'excavation_targets')">🚜
+                                Excavation</button>
+                            <button class="task-btn"
+                                onclick="openTaskOption('Rebar Installation', 'rebar_struct_targets')">🏗 Rebar
+                                Installation</button>
+                            <button class="task-btn"
+                                onclick="openTaskOption('Rebar fabrication', 'rebar_fab_targets')">⚙️
+                                Rebar Fab</button>
+                            <button class="task-btn" onclick="openTaskOption('Casting concrete', 'casting_targets')">🏗
+                                Casting</button>
+                            <button class="task-btn" onclick="openTaskOption('Scaffolding installation', 'floor')">🪜
+                                Scaffolding</button>
+                            <button class="task-btn"
+                                onclick="openTaskOption('Form work installation', 'formwork_targets')">🪵
+                                Form Work</button>
+                            <button class="task-btn"
+                                onclick="openTaskOption('Demolishing formwork', 'demolishing_targets')">🔨
+                                Demolishing</button>
+                            <button class="task-btn"
+                                onclick="openTaskOption('Lean concrete', 'lean_concrete_targets')">🪨
+                                Lean Concrete</button>
 
-    // Apply WEAKER, natural HDR-like filter to the captured image
-    ctx.filter = "contrast(1.02) saturate(1.05) brightness(1.01)";
-    ctx.drawImage(video, 0, 0, w, h);
-    ctx.filter = "none";
+                            <div class="separator">Finishing</div>
 
-    const includeFloor = document.getElementById("watermark-floor-check").checked;
-    const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
-    addWatermark(ctx, canvas, selectedUnit, floorText);
+                            <button class="task-btn" onclick="openTaskOption('Brick wall installation', 'floor')">🧱
+                                Brick Wall</button>
+                            <button class="task-btn" onclick="openTaskOption('Plastering', 'floor_lift_gf')">🎨
+                                Plastering</button>
+                            <button class="task-btn" onclick="openTaskOption('Skim coat', 'floor')">🖌 Skim
+                                Coat</button>
+                            <button class="task-btn" onclick="openTaskOption('Installation of MEP work', 'floor')">⚡️
+                                MEP Work</button>
+                            <button class="task-btn" onclick="openTaskOption('Water piping installation', 'floor')">🚰
+                                Water Piping</button>
+                            <button class="task-btn" onclick="addTaskDirect('General Cleaning')">🧹 Cleaning</button>
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-    savePhoto(dataUrl);
+                            <div class="separator">Roof & Others</div>
 
-    // Auto-close camera after capture
-    closeCameraOverlay();
-}
-function addWatermark(ctx, canvas, unitText, floorText) {
-    const fontSize = canvas.width * 0.05;
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    const dateStr = new Date().toLocaleDateString('en-GB');
-    const margin = canvas.width * 0.03;
-    const padding = fontSize * 0.4;
-    const lineHeight = fontSize * 1.2;
+                            <button class="task-btn" onclick="addTaskDirect('Parapet Installation')">🏠 Parapet</button>
+                            <button class="task-btn" onclick="addTaskDirect('Trus Installation for roof')">📐 Roof
+                                Trus</button>
+                            <button class="task-btn" onclick="addTaskDirect('Safety scaffolding/net installation')">🦺
+                                Safety Net</button>
+                        </div>
 
-    // Calculate text lines and box size
-    const lines = [dateStr, unitText];
-    if (floorText) lines.push(floorText);
-
-    let maxWidth = 0;
-    lines.forEach(line => {
-        const w = ctx.measureText(line).width;
-        if (w > maxWidth) maxWidth = w;
-    });
-
-    const boxWidth = maxWidth + padding * 2;
-    const boxHeight = lines.length * lineHeight + padding * 2 - (lineHeight - fontSize);
-    const boxX = margin - padding;
-    const boxY = margin - padding;
-
-    // Draw dark background box
-    ctx.save();
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-    ctx.beginPath();
-    const r = fontSize * 0.3; // border radius
-    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, r);
-    ctx.fill();
-    ctx.restore();
-
-    // Draw text
-    ctx.fillStyle = "white";
-    ctx.shadowColor = "black";
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetX = 1;
-    ctx.shadowOffsetY = 1;
-    let yPos = margin + fontSize;
-    lines.forEach(line => {
-        ctx.fillText(line, margin, yPos);
-        yPos += lineHeight;
-    });
-}
-// (Functionality moved to IndexedDB section)
-function selectPhotoFloor(floor) {
-    selectedPhotoFloor = floor;
-    document.querySelector("#photo-tab .chip-group").querySelectorAll(".chip").forEach(c => {
-        if (c.textContent === floor) c.classList.add("selected");
-        else c.classList.remove("selected");
-    });
-}
-
-function removePhoto(index) {
-    const contractor = getContractor(selectedUnit);
-    if (currentReport[contractor] && currentReport[contractor][selectedUnit]) {
-        currentReport[contractor][selectedUnit].photos.splice(index, 1);
-        renderPhotoPreview(); // Async now
-        saveLocalData();
-    }
-}
-
-function saveAndClose() {
-    const contractor = getContractor(selectedUnit);
-    if (!currentReport[contractor]) currentReport[contractor] = {};
-    if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-
-    // Overwrite tasks with current list
-    currentReport[contractor][selectedUnit].tasks = currentTaskList.map(t => ({ text: t }));
-
-    resetSelection();
-    saveLocalData();
-}
-
-function naturalSort(a, b) {
-    const numA = parseInt(a.replace(/\D/g, '')) || 0;
-    const numB = parseInt(b.replace(/\D/g, '')) || 0;
-    if (numA === numB) return a.localeCompare(b);
-    return numA - numB;
-}
-
-function copyText(btn, text) {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
-
-    const originalText = btn.innerHTML;
-    btn.innerHTML = "✅ Copied!";
-    setTimeout(() => btn.innerHTML = originalText, 1500);
-}
-
-// ---------------------------------------------------------
-// INDEXEDDB PERSISTENCE (replaces localStorage for larger storage)
-// ---------------------------------------------------------
-const DB_NAME = "ConstructionLogDB";
-const DB_VERSION = 2; // Incremented for 'images' store
-const DB_STORE = "reports";
-const IMG_STORE = "images";
-
-function openDB() {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
-        request.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains(DB_STORE)) {
-                db.createObjectStore(DB_STORE, { keyPath: "id" });
-            }
-            if (!db.objectStoreNames.contains(IMG_STORE)) {
-                db.createObjectStore(IMG_STORE); // Key = UUID
-            }
-        };
-        request.onsuccess = (e) => resolve(e.target.result);
-        request.onerror = (e) => reject(e.target.error);
-    });
-}
-
-// Helper to save image blob
-async function saveImageToDB(id, blob) {
-    const db = await openDB();
-    const tx = db.transaction(IMG_STORE, "readwrite");
-    const store = tx.objectStore(IMG_STORE);
-    store.put(blob, id);
-    return new Promise((resolve, reject) => {
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
-// Helper to get image blob
-async function getImageFromDB(id) {
-    const db = await openDB();
-    const tx = db.transaction(IMG_STORE, "readonly");
-    const store = tx.objectStore(IMG_STORE);
-    const req = store.get(id);
-    return new Promise((resolve, reject) => {
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-    });
-}
-
-async function saveLocalData() {
-    try {
-        const dateKey = new Date().toISOString().split('T')[0];
-        const payload = {
-            id: STORAGE_KEY,
-            date: dateKey,
-            data: currentReport
-        };
-
-        const db = await openDB();
-        const tx = db.transaction(DB_STORE, "readwrite");
-        const store = tx.objectStore(DB_STORE);
-        store.put(payload);
-        await new Promise((resolve, reject) => {
-            tx.oncomplete = resolve;
-            tx.onerror = () => reject(tx.error);
-        });
-        db.close();
-    } catch (e) {
-        console.error("Failed to save data:", e);
-    }
-}
-
-async function loadLocalData() {
-    try {
-        const db = await openDB();
-        const tx = db.transaction(DB_STORE, "readonly");
-        const store = tx.objectStore(DB_STORE);
-        const request = store.get(STORAGE_KEY);
-
-        const result = await new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-        db.close();
-
-        if (result) {
-            const todayKey = new Date().toISOString().split('T')[0];
-            if (result.date === todayKey) {
-                currentReport = result.data || {};
-                console.log("Data loaded from IndexedDB for today.");
-            } else {
-                console.log("New day detected, clearing old data.");
-                currentReport = {};
-                await saveLocalData();
-            }
-            return;
-        }
-    } catch (e) {
-        console.error("IndexedDB load failed", e);
-    }
-}
-
-// Auto-save logic remains...
-document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") {
-        if (selectedUnit) syncCurrentUnitData();
-        saveLocalData();
-    }
-});
-window.addEventListener("beforeunload", () => {
-    if (selectedUnit) syncCurrentUnitData();
-    // No synchronous fallback possible for large binary data
-});
-
-// Update Save Photo to use Blob + ID
-function savePhoto(dataUrl) {
-    // Convert dataURL to Blob
-    fetch(dataUrl)
-        .then(res => res.blob())
-        .then(async blob => {
-            const id = crypto.randomUUID();
-            await saveImageToDB(id, blob);
-
-            const contractor = getContractor(selectedUnit);
-            if (!currentReport[contractor]) currentReport[contractor] = {};
-            if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-
-            // Push reference
-            currentReport[contractor][selectedUnit].photos.push({
-                type: 'db_ref',
-                id: id,
-                timestamp: Date.now()
-            });
-
-            renderPhotoPreview();
-            saveLocalData();
-        })
-        .catch(err => console.error("Save failed", err));
-}
-
-// Re-write to handle async loading
-async function renderPhotoPreview() {
-    const gallery = document.getElementById("preview-gallery");
-    gallery.innerHTML = "";
-    const contractor = getContractor(selectedUnit);
-    if (!currentReport[contractor] || !currentReport[contractor][selectedUnit]) return;
-
-    const photos = currentReport[contractor][selectedUnit].photos;
-
-    for (let i = 0; i < photos.length; i++) {
-        const item = photos[i];
-        let src = "";
-
-        if (typeof item === 'string') {
-            // Legacy Base64
-            src = item;
-        } else if (item.type === 'db_ref') {
-            const blob = await getImageFromDB(item.id);
-            if (blob) src = URL.createObjectURL(blob);
-        }
-
-        if (!src) continue;
-
-        const wrapper = document.createElement("div");
-        wrapper.style.cssText = "position:relative; display:inline-block;";
-
-        const img = document.createElement("img");
-        img.src = src;
-        img.className = "preview-img";
-
-        const delBtn = document.createElement("button");
-        delBtn.textContent = "×";
-        delBtn.style.cssText = "position:absolute; top:2px; right:2px; background:rgba(0,0,0,0.7); color:white; border:none; border-radius:50%; width:24px; height:24px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1;";
-        delBtn.onclick = () => removePhoto(i);
-
-        wrapper.appendChild(img);
-        wrapper.appendChild(delBtn);
-        gallery.appendChild(wrapper);
-    }
-}
-
-// Updated Render Reports (Async)
-async function renderAllReports() {
-    const container = document.getElementById("reports-container");
-    container.innerHTML = "";
-    const activeContractors = Object.keys(currentReport);
-
-    if (activeContractors.length === 0) {
-        container.innerHTML = `<p style="text-align:center; color:#94a3b8; margin-top:20px;">No reports yet.</p>`;
-        return;
-    }
-
-    for (const contractor of activeContractors) {
-        const { text, photoData } = await generateContractorReportDataAsync(contractor);
-
-        const card = document.createElement("div");
-        card.className = "report-card";
-        card.style.borderLeftColor = getContractorColor(contractor);
-
-        let imagesHtml = `<div class="preview-gallery">`;
-        if (photoData) {
-            photoData.forEach((item, idx) => {
-                const url = item.url; // Blob URL
-                const unit = item.unit;
-                const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
-                const filename = `${dateStr}_${unit}_${idx + 1}.jpg`;
-                imagesHtml += `<a href="${url}" download="${filename}"><img src="${url}" class="preview-img"></a>`;
-            });
-        }
-        imagesHtml += `</div>`;
-
-        card.innerHTML = `
-            <div class="report-header">
-                <h3>${contractor}</h3>
+                        <!-- Custom Task Input -->
+                        <div class="custom-task-box">
+                            <span class="label">Custom Input</span>
+                            <div class="input-row">
+                                <input type="text" id="custom-task-input" placeholder="Type manual task..."
+                                    class="custom-task-margin">
+                                <button class="btn-small" onclick="addCustomTask()">Add</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="report-content">${text}</div>
-            
-            <div class="action-row" style="display:flex; gap:10px; margin-top:10px;">
-                <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">
-                    📋 Copy Text
-                </button>
+
+            <!-- Sticky Footer for Save -->
+            <div class="sticky-footer">
+                <button class="btn-primary" onclick="saveAndClose()">Save & Close</button>
             </div>
-            <div style="margin-top:10px">${imagesHtml}</div>
-        `;
-        container.appendChild(card);
-    }
-}
 
-// Updated Generation Logic
-async function generateContractorReportDataAsync(contractor) {
-    const data = currentReport[contractor];
-    let units = Object.keys(data).sort(naturalSort);
-    let allPhotoData = [];
-    let body = "";
+        </div>
 
-    for (const unit of units) {
-        const unitData = data[unit];
+        <!-- Task Option Modal -->
+        <div id="option-modal" class="modal hidden">
+            <div class="modal-content popup-box">
+                <h3 id="modal-title" style="font-weight:900; margin-bottom:10px; color: black;">Select Option</h3>
+                <p class="modal-subtitle">Choose one or multiple</p>
+                <div id="modal-options" class="modal-options-grid">
+                    <!-- Dynamic buttons -->
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="closeModal()">Back</button>
+                    <button class="btn-primary" onclick="confirmModalSelection()">Confirm</button>
+                </div>
+            </div>
+        </div>
 
-        // Resolve images
-        for (let photo of unitData.photos) {
-            let url = "";
-            if (typeof photo === 'string') {
-                url = photo;
-            } else if (photo.type === 'db_ref') {
-                const blob = await getImageFromDB(photo.id);
-                if (blob) url = URL.createObjectURL(blob);
-            }
-            if (url) allPhotoData.push({ url: url, unit: unit });
-        }
+        <!-- Reports Section -->
+        <div id="reports-container" class="reports-container"></div>
+    </div>
 
-        if (unitData.tasks.length > 0) {
-            body += `${unit}:\n`;
-            unitData.tasks.forEach(t => {
-                body += `-${t.text}\n`;
-            });
-            body += `\n`;
-        }
-    }
-
-    const fullText = `${contractor}\n${body}`.trim();
-    return { text: fullText, photoData: allPhotoData };
-}
-
-// Note: generateContractorReportData (sync) is deprecated but kept if needed for non-image logic.
-// We replace original shareToWhatsApp to use new async generator.
-
-async function shareToWhatsApp(contractor) {
-    const { text, photoData } = await generateContractorReportDataAsync(contractor);
-
-    const files = [];
-    for (let i = 0; i < photoData.length; i++) {
-        try {
-            const res = await fetch(photoData[i].url);
-            const blob = await res.blob();
-            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-            const file = new File([blob], filename, { type: 'image/jpeg' });
-            files.push(file);
-        } catch (e) {
-            console.error('Failed to convert photo', e);
-        }
-    }
-
-    if (navigator.share) {
-        const shareData = {
-            title: 'Construction Report',
-            text: text
-        };
-        if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
-            shareData.files = files;
-        }
-        try { await navigator.share(shareData); return; } catch (err) { }
-    }
-    const encoded = encodeURIComponent(text);
-    window.open(`https://wa.me/?text=${encoded}`, '_blank');
-}
+    <!-- PWA Install Prompt Logic could go here -->
+    <script src="app.js?v=20"></script>
+    <script>
+        // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
+    </script>
+</body>
