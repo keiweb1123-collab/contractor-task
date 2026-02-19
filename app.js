@@ -38,7 +38,7 @@ let normalCameraIndex = -1;
 let wideCameraIndex = -1;
 let isWideActive = false;
 let currentFacingMode = "environment";
-let currentRotation = 0; // 0, 90, -90
+// let currentRotation = 0; // Removed
 
 // =============================================================
 // INIT
