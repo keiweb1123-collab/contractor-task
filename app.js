@@ -151,9 +151,9 @@ function openTaskOption(taskName, type) {
     else if (type === 'excavation_targets') options = ["Pile cap", "Retaining wall", "Septic tank", "Ground tank"];
     else if (type === 'rebar_struct_targets') options = ["Pile cap", "Retaining wall", "Beam", "Slab", "Column", "Stairs"];
     else if (type === 'rebar_fab_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column"];
-    else if (type === 'casting_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Car port slope"];
+    else if (type === 'casting_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Car port slope", "Stairs"];
     else if (type === 'formwork_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column", "Stairs"];
-    else if (type === 'demolishing_targets') options = ["Beam", "Slab", "Retaining wall", "Column"];
+    else if (type === 'demolishing_targets') options = ["Beam", "Slab", "Retaining wall", "Column", "Stairs"];
     else if (type === 'lean_concrete_targets') options = ["Retaining wall", "Beam", "Pile cap", "Slab"];
 
     title.textContent = `${taskName} for...`;
