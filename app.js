@@ -148,13 +148,15 @@ function openTaskOption(taskName, type) {
     if (type === 'floor' || type === 'floor_lift_rebar') options = ["GF", "1F", "2F", "3F", "RF"];
     else if (type === 'floor_lift_gf') options = ["GF", "1F", "2F", "3F", "RF", "Lift"];
     else if (type === 'floor_lift') options = ["1F", "2F", "3F", "RF", "Lift"];
-    else if (type === 'excavation_targets') options = ["Pile cap", "Retaining wall", "Septic tank", "Ground tank"];
-    else if (type === 'rebar_struct_targets') options = ["Pile cap", "Retaining wall", "Beam", "Slab", "Column", "Stairs"];
+    else if (type === 'excavation_targets') options = ["Pile cap", "Retaining wall", "Septic tank", "Ground tank", "Beam"];
+    else if (type === 'rebar_struct_targets') options = ["Pile cap", "Retaining wall", "Beam", "Slab", "Column", "Stairs", "Carport slope area"];
     else if (type === 'rebar_fab_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column"];
     else if (type === 'casting_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Car port slope", "Stairs"];
     else if (type === 'formwork_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column", "Stairs"];
     else if (type === 'demolishing_targets') options = ["Beam", "Slab", "Retaining wall", "Column", "Stairs"];
     else if (type === 'lean_concrete_targets') options = ["Retaining wall", "Beam", "Pile cap", "Slab"];
+    else if (type === 'opening_targets') options = ["Making door opening", "Making window opening", "Making lift opening"];
+    else if (type === 'repair_targets') options = ["Roof slope"];
 
     title.textContent = `${taskName} for...`;
 
@@ -208,12 +210,19 @@ function confirmModalSelection() {
         return;
     }
 
-    if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets') {
+    if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets' || pendingTaskCategory === 'opening_targets' || pendingTaskCategory === 'repair_targets') {
         let prefix;
         if (pendingTaskCategory === 'lean_concrete_targets') prefix = 'Lean concrete for';
         else if (pendingTaskCategory === 'rebar_fab_targets') prefix = 'Rebar fabrication for';
+        else if (pendingTaskCategory === 'opening_targets') prefix = ''; // Option text itself is full description
+        else if (pendingTaskCategory === 'repair_targets') prefix = '';
         else prefix = `${pendingTaskName} for`;
-        addTaskDirect(`${prefix} ${joinedSelection}`);
+
+        let finalStr = prefix ? `${prefix} ${joinedSelection}` : joinedSelection;
+        if (pendingTaskCategory === 'repair_targets') {
+            finalStr = `Repairing ${joinedSelection}`;
+        }
+        addTaskDirect(finalStr);
         closeModal();
         return;
     }
