@@ -156,6 +156,7 @@ function openTaskOption(taskName, type) {
     else if (type === 'demolishing_targets') options = ["Beam", "Slab", "Retaining wall", "Column", "Stairs"];
     else if (type === 'lean_concrete_targets') options = ["Retaining wall", "Beam", "Pile cap", "Slab", "car slope area"];
     else if (type === 'plastering_targets') options = ["GF", "1F", "2F", "3F", "RF", "Lift", "outside wall", "Facade"];
+    else if (type === 'skim_coat_targets') options = ["GF", "1F", "2F", "3F", "RF", "Lift", "Outside wall", "Facade"];
     else if (type === 'waterproofing_targets') options = ["Roof", "Bathroom", "Pit Lift", "Balcony"];
     else if (type === 'opening_targets') options = ["Making door opening", "Making window opening", "Making lift opening"];
     else if (type === 'repair_targets') options = ["Roof slope"];
@@ -230,15 +231,15 @@ function confirmModalSelection() {
         return;
     }
 
-    if (pendingTaskCategory === 'plastering_targets') {
-        if (pendingOptions.has("outside wall") || pendingOptions.has("Facade")) {
-            const item = pendingOptions.has("outside wall") ? "outside wall" : "Facade";
-            addTaskDirect(`Plastering for ${item}`);
+    if (pendingTaskCategory === 'plastering_targets' || pendingTaskCategory === 'skim_coat_targets') {
+        if (pendingOptions.has("outside wall") || pendingOptions.has("Outside wall") || pendingOptions.has("Facade")) {
+            const item = pendingOptions.has("outside wall") || pendingOptions.has("Outside wall") ? (pendingOptions.has("outside wall") ? "outside wall" : "Outside wall") : "Facade";
+            addTaskDirect(`${pendingTaskName} for ${item}`);
             closeModal();
             return;
         }
         // Otherwise, proceed to floor selection
-        pendingTaskName = "Plastering";
+        const taskNameBase = pendingTaskName;
         pendingTaskCategory = "floor_lift_gf";
         // Re-use current selections as floors if they happen to be valid floors
         const floors = ["GF", "1F", "2F", "3F", "RF", "Lift"];
@@ -246,7 +247,7 @@ function confirmModalSelection() {
         
         if (validFloors.length > 0) {
             // Already selected floors, just add them
-            addTaskDirect(`Plastering on ${validFloors.join(", ")}`);
+            addTaskDirect(`${taskNameBase} on ${validFloors.join(", ")}`);
             closeModal();
             return;
         }
@@ -255,7 +256,7 @@ function confirmModalSelection() {
         const grid = document.getElementById("modal-options");
         const title = document.getElementById("modal-title");
         grid.innerHTML = "";
-        title.textContent = `Plastering on...`;
+        title.textContent = `${taskNameBase} on...`;
         floors.forEach(f => {
             const btn = document.createElement("button");
             btn.className = "modal-option-btn";
