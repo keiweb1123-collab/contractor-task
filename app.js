@@ -151,15 +151,22 @@ function openTaskOption(taskName, type) {
     else if (type === 'excavation_targets') options = ["Pile cap", "Retaining wall", "Septic tank", "Ground tank", "Beam"];
     else if (type === 'rebar_struct_targets') options = ["Pile cap", "Retaining wall", "Beam", "Slab", "Column", "Stairs", "Carport slope area"];
     else if (type === 'rebar_fab_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column"];
-    else if (type === 'casting_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Car port slope", "Stairs"];
+    else if (type === 'casting_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Carport slope area", "Stairs"];
     else if (type === 'formwork_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column", "Stairs"];
     else if (type === 'demolishing_targets') options = ["Beam", "Slab", "Retaining wall", "Column", "Stairs"];
-    else if (type === 'lean_concrete_targets') options = ["Retaining wall", "Beam", "Pile cap", "Slab", "car slope area"];
+    else if (type === 'lean_concrete_targets') options = ["Retaining wall", "Beam", "Pile cap", "Slab", "Carport slope area"];
     else if (type === 'plastering_targets') options = ["GF", "1F", "2F", "3F", "RF", "Lift", "outside wall", "Facade"];
     else if (type === 'skim_coat_targets') options = ["GF", "1F", "2F", "3F", "RF", "Lift", "Outside wall", "Facade"];
     else if (type === 'waterproofing_targets') options = ["Roof", "Bathroom", "Pit Lift", "Balcony"];
     else if (type === 'opening_targets') options = ["Making door opening", "Making window opening", "Making lift opening"];
-    else if (type === 'repair_targets') options = ["Roof slope"];
+    else if (type === 'repair_targets') options = ["Roof slope", "Door opening", "Window opening"];
+    else if (type === 'wall_tile_targets') options = ["GF", "1F", "2F", "3F", "RF", "Facade"];
+    else if (type === 'painting_targets') options = ["Wall", "Ceiling", "Parapet"];
+    else if (type === 'finishing_repair_targets') options = ["Repair Window opening", "Repair Door Opening", "Repair roof slope"];
+    else if (type === 'screeding_targets') options = ["Screeding floor for SPC"];
+    else if (type === 'canopy_targets') options = ["Canopy frame installation", "Canopy tempered glass installation"];
+    else if (type === 'canopy_area_targets') options = ["Entrance area", "Balcony area"];
+    else if (type === 'door_install_targets') options = ["Door frame installation", "Door installation"];
 
     title.textContent = `${taskName} for...`;
 
@@ -185,11 +192,148 @@ function toggleOption(btn, value) {
     }
 }
 
+function formatList(arr) {
+    if (arr.length === 0) return "";
+    if (arr.length === 1) return arr[0];
+    if (arr.length === 2) return arr.join(" and ");
+    return arr.slice(0, -1).join(", ") + " and " + arr[arr.length - 1];
+}
+
 function confirmModalSelection() {
-    if (pendingOptions.size === 0) { closeModal(); return; }
+    // If nothing selected, and it's a 2nd step (floor/area), we might allow adding as-is 
+    // especially for Waterproofing as requested.
+    if (pendingOptions.size === 0) {
+        if (pendingTaskCategory.includes('floor') || pendingTaskCategory.includes('area')) {
+            addTaskDirect(pendingTaskName); // Add without suffix
+            closeModal();
+            return;
+        }
+        closeModal();
+        return;
+    }
 
     const selectedArray = Array.from(pendingOptions);
-    const joinedSelection = selectedArray.join(", ");
+    const joinedSelection = formatList(selectedArray);
+
+    if (pendingTaskCategory === 'plastering_targets' || pendingTaskCategory === 'skim_coat_targets') {
+        if (pendingOptions.has("Lift")) {
+            addTaskDirect("Inside of the lift");
+            closeModal();
+            return;
+        }
+    }
+
+    if (pendingTaskCategory === 'wall_tile_targets') {
+        if (pendingOptions.has("Facade")) {
+            addTaskDirect("Wall tile for Facade");
+            closeModal();
+            return;
+        }
+        // If not Facade, transition to floor selection
+        pendingTaskName = `Wall tile for ${joinedSelection}`;
+        pendingTaskCategory = "floor_lift_gf";
+        const grid = document.getElementById("modal-options");
+        const title = document.getElementById("modal-title");
+        grid.innerHTML = "";
+        title.textContent = `${pendingTaskName} on...`;
+        ["GF", "1F", "2F", "3F", "RF", "Lift"].forEach(f => {
+            const btn = document.createElement("button");
+            btn.className = "modal-option-btn";
+            btn.textContent = f;
+            btn.onclick = () => toggleOption(btn, f);
+            grid.appendChild(btn);
+        });
+        pendingOptions.clear();
+        return;
+    }
+
+    if (pendingTaskCategory === 'painting_targets' || pendingTaskCategory === 'screeding_targets' || pendingTaskCategory === 'door_install_targets' || pendingTaskCategory === 'window_install_targets') {
+        let prefix = "";
+        if (pendingTaskCategory === 'painting_targets') prefix = "Painting ";
+        else if (pendingTaskCategory === 'door_install_targets' || pendingTaskCategory === 'window_install_targets') prefix = "";
+        else prefix = "";
+
+        pendingTaskName = prefix ? `${prefix}${joinedSelection}` : joinedSelection;
+        pendingTaskCategory = "floor_lift_gf";
+        const grid = document.getElementById("modal-options");
+        const title = document.getElementById("modal-title");
+        grid.innerHTML = "";
+        title.textContent = `${pendingTaskName} on...`;
+        ["GF", "1F", "2F", "3F", "RF", "Lift"].forEach(f => {
+            const btn = document.createElement("button");
+            btn.className = "modal-option-btn";
+            btn.textContent = f;
+            btn.onclick = () => toggleOption(btn, f);
+            grid.appendChild(btn);
+        });
+        pendingOptions.clear();
+        return;
+    }
+
+    if (pendingTaskCategory === 'canopy_targets') {
+        pendingTaskName = joinedSelection;
+        pendingTaskCategory = "canopy_area_targets";
+        const grid = document.getElementById("modal-options");
+        const title = document.getElementById("modal-title");
+        grid.innerHTML = "";
+        title.textContent = `${pendingTaskName} at...`;
+        ["Entrance area", "Balcony area"].forEach(opt => {
+            const btn = document.createElement("button");
+            btn.className = "modal-option-btn";
+            btn.textContent = opt;
+            btn.onclick = () => toggleOption(btn, opt);
+            grid.appendChild(btn);
+        });
+        pendingOptions.clear();
+        return;
+    }
+
+    if (pendingTaskCategory === 'finishing_repair_targets') {
+        selectedArray.forEach(opt => addTaskDirect(opt));
+        closeModal();
+        return;
+    }
+
+    if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets' || pendingTaskCategory === 'opening_targets' || pendingTaskCategory === 'repair_targets' || pendingTaskCategory === 'waterproofing_targets') {
+        let prefix;
+        if (pendingTaskCategory === 'lean_concrete_targets') prefix = 'Lean concrete for';
+        else if (pendingTaskCategory === 'rebar_fab_targets') prefix = 'Rebar fabrication for';
+        else if (pendingTaskCategory === 'opening_targets') prefix = ''; 
+        else if (pendingTaskCategory === 'repair_targets') prefix = '';
+        else if (pendingTaskCategory === 'waterproofing_targets') prefix = 'Waterproofing for';
+        else prefix = `${pendingTaskName} for`;
+        
+        let finalStr = prefix ? `${prefix} ${joinedSelection}` : joinedSelection;
+        if (pendingTaskCategory === 'repair_targets') finalStr = `Repairing ${joinedSelection}`;
+
+        if (pendingTaskCategory === 'waterproofing_targets') {
+            pendingTaskName = finalStr;
+            pendingTaskCategory = "floor_lift_gf";
+            const grid = document.getElementById("modal-options");
+            const title = document.getElementById("modal-title");
+            grid.innerHTML = "";
+            title.textContent = `${pendingTaskName} on...`;
+            ["GF", "1F", "2F", "3F", "RF", "Lift"].forEach(f => {
+                const btn = document.createElement("button");
+                btn.className = "modal-option-btn";
+                btn.textContent = f;
+                btn.onclick = () => toggleOption(btn, f);
+                grid.appendChild(btn);
+            });
+            pendingOptions.clear();
+            return;
+        }
+
+        addTaskDirect(finalStr);
+        closeModal();
+        return;
+    }
+
+    if (pendingTaskCategory === 'canopy_area_targets') {
+        addTaskDirect(`${pendingTaskName} at ${joinedSelection}`);
+        closeModal();
+        return;
+    }
 
     if (pendingTaskCategory === 'rebar_struct_targets' || pendingTaskCategory === 'casting_targets' || pendingTaskCategory === 'formwork_targets' || pendingTaskCategory === 'demolishing_targets') {
         if (pendingTaskCategory === 'casting_targets') pendingTaskName = `Casting concrete for ${joinedSelection}`;
