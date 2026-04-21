@@ -160,13 +160,15 @@ function openTaskOption(taskName, type) {
     else if (type === 'waterproofing_targets') options = ["Roof", "Bathroom", "Pit Lift", "Balcony"];
     else if (type === 'opening_targets') options = ["Making door opening", "Making window opening", "Making lift opening"];
     else if (type === 'repair_targets') options = ["Roof slope", "Door opening", "Window opening"];
-    else if (type === 'wall_tile_targets') options = ["GF", "1F", "2F", "3F", "RF", "Facade"];
+    else if (type === 'wall_tile_targets') options = ["Wall tile installation", "Facade"];
     else if (type === 'painting_targets') options = ["Wall", "Ceiling", "Parapet"];
     else if (type === 'finishing_repair_targets') options = ["Repair Window opening", "Repair Door Opening", "Repair roof slope"];
     else if (type === 'screeding_targets') options = ["Screeding floor for SPC"];
     else if (type === 'canopy_targets') options = ["Canopy frame installation", "Canopy tempered glass installation"];
     else if (type === 'canopy_area_targets') options = ["Entrance area", "Balcony area"];
     else if (type === 'door_install_targets') options = ["Door frame installation", "Door installation"];
+    else if (type === 'window_install_targets') options = ["Installation of window frame", "Installation of window"];
+    else if (type === 'pool_targets') options = ["Installation of pool", "Casting concrete for pool", "Tile installation for pool area"];
 
     title.textContent = `${taskName} for...`;
 
@@ -229,8 +231,8 @@ function confirmModalSelection() {
             closeModal();
             return;
         }
-        // If not Facade, transition to floor selection
-        pendingTaskName = `Wall tile for ${joinedSelection}`;
+        // If "Wall tile installation" is selected, transition to floor selection
+        pendingTaskName = "Wall tile installation";
         pendingTaskCategory = "floor_lift_gf";
         const grid = document.getElementById("modal-options");
         const title = document.getElementById("modal-title");
@@ -244,6 +246,12 @@ function confirmModalSelection() {
             grid.appendChild(btn);
         });
         pendingOptions.clear();
+        return;
+    }
+
+    if (pendingTaskCategory === 'pool_targets') {
+        addTaskDirect(joinedSelection);
+        closeModal();
         return;
     }
 
@@ -1009,10 +1017,22 @@ async function shareToWhatsApp(contractor) {
         } catch (e) { console.error('Photo convert failed:', e); }
     }
 
+    // まずネイティブシェアシートを試みる
     if (navigator.share) {
         const shareData = { title: 'Construction Report', text };
         if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) shareData.files = files;
-        try { await navigator.share(shareData); return; } catch (err) { }
+        try {
+            await navigator.share(shareData);
+            return; // 成功 or ユーザーキャンセル(AbortError)で終了
+        } catch (err) {
+            if (err.name === 'AbortError') return; // キャンセルは何もしない
+            // それ以外のエラーはdeep linkへフォールバック
+        }
     }
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+
+    // フォールバック: whatsapp:// ディープリンク（WAは必ずインストール済みの前提）
+    // wa.me は使わない（ダウンロードページにリダイレクトされるリスクがあるため）
+    window.location.href = `whatsapp://send?text=${encodeURIComponent(text)}`;
 }
+
+
