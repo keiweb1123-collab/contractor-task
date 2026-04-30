@@ -39,6 +39,7 @@ let wideCameraIndex = -1;
 let isWideActive = false;
 let currentFacingMode = "environment";
 let manualRotation = 0; // 0, 90, 180, 270
+let isFlashOn = false;
 
 // =============================================================
 // INIT
@@ -162,6 +163,7 @@ function openTaskOption(taskName, type) {
     else if (type === 'repair_targets') options = ["Roof slope", "Door opening", "Window opening"];
     else if (type === 'wall_tile_targets') options = ["Wall tile installation", "Facade"];
     else if (type === 'painting_targets') options = ["Wall", "Ceiling", "Parapet"];
+    else if (type === 'painting_type') options = ["Painting", "Primer painting"];
     else if (type === 'finishing_repair_targets') options = ["Repair Window opening", "Repair Door Opening", "Repair roof slope"];
     else if (type === 'screeding_targets') options = ["Screeding floor for SPC"];
     else if (type === 'canopy_targets') options = ["Canopy frame installation", "Canopy tempered glass installation"];
@@ -217,13 +219,7 @@ function confirmModalSelection() {
     const selectedArray = Array.from(pendingOptions);
     const joinedSelection = formatList(selectedArray);
 
-    if (pendingTaskCategory === 'plastering_targets' || pendingTaskCategory === 'skim_coat_targets') {
-        if (pendingOptions.has("Lift")) {
-            addTaskDirect("Inside of the lift");
-            closeModal();
-            return;
-        }
-    }
+
 
     if (pendingTaskCategory === 'wall_tile_targets') {
         if (pendingOptions.has("Facade")) {
@@ -255,9 +251,27 @@ function confirmModalSelection() {
         return;
     }
 
+    if (pendingTaskCategory === 'painting_type') {
+        pendingTaskName = joinedSelection;
+        pendingTaskCategory = "painting_targets";
+        const grid = document.getElementById("modal-options");
+        const title = document.getElementById("modal-title");
+        grid.innerHTML = "";
+        title.textContent = `${pendingTaskName} for...`;
+        ["Wall", "Ceiling", "Parapet"].forEach(opt => {
+            const btn = document.createElement("button");
+            btn.className = "modal-option-btn";
+            btn.textContent = opt;
+            btn.onclick = () => toggleOption(btn, opt);
+            grid.appendChild(btn);
+        });
+        pendingOptions.clear();
+        return;
+    }
+
     if (pendingTaskCategory === 'painting_targets' || pendingTaskCategory === 'screeding_targets' || pendingTaskCategory === 'door_install_targets' || pendingTaskCategory === 'window_install_targets') {
         let prefix = "";
-        if (pendingTaskCategory === 'painting_targets') prefix = "Painting ";
+        if (pendingTaskCategory === 'painting_targets') prefix = `${pendingTaskName} `;
         else if (pendingTaskCategory === 'door_install_targets' || pendingTaskCategory === 'window_install_targets') prefix = "";
         else prefix = "";
 
@@ -384,39 +398,24 @@ function confirmModalSelection() {
     }
 
     if (pendingTaskCategory === 'plastering_targets' || pendingTaskCategory === 'skim_coat_targets') {
-        if (pendingOptions.has("outside wall") || pendingOptions.has("Outside wall") || pendingOptions.has("Facade")) {
-            const item = pendingOptions.has("outside wall") || pendingOptions.has("Outside wall") ? (pendingOptions.has("outside wall") ? "outside wall" : "Outside wall") : "Facade";
-            addTaskDirect(`${pendingTaskName} for ${item}`);
-            closeModal();
-            return;
-        }
-        // Otherwise, proceed to floor selection
-        const taskNameBase = pendingTaskName;
-        pendingTaskCategory = "floor_lift_gf";
-        // Re-use current selections as floors if they happen to be valid floors
-        const floors = ["GF", "1F", "2F", "3F", "RF", "Lift"];
-        const validFloors = selectedArray.filter(v => floors.includes(v));
+        const specialItems = [];
+        if (pendingOptions.has("outside wall") || pendingOptions.has("Outside wall")) specialItems.push("Outside wall");
+        if (pendingOptions.has("Facade")) specialItems.push("Facade");
         
-        if (validFloors.length > 0) {
-            // Already selected floors, just add them
-            addTaskDirect(`${taskNameBase} on ${validFloors.join(", ")}`);
-            closeModal();
-            return;
+        if (pendingOptions.has("Lift")) {
+            addTaskDirect("Inside of the lift");
         }
 
-        // Show floor selection
-        const grid = document.getElementById("modal-options");
-        const title = document.getElementById("modal-title");
-        grid.innerHTML = "";
-        title.textContent = `${taskNameBase} on...`;
-        floors.forEach(f => {
-            const btn = document.createElement("button");
-            btn.className = "modal-option-btn";
-            btn.textContent = f;
-            btn.onclick = () => toggleOption(btn, f);
-            grid.appendChild(btn);
-        });
-        pendingOptions.clear();
+        const floors = ["GF", "1F", "2F", "3F", "RF"];
+        const validFloors = selectedArray.filter(v => floors.includes(v));
+
+        const allSelected = [...validFloors, ...specialItems];
+        if (allSelected.length > 0) {
+            let connector = (specialItems.length === 0 && validFloors.length > 0) ? "on" : "for";
+            addTaskDirect(`${pendingTaskName} ${connector} ${formatList(allSelected)}`);
+        }
+
+        closeModal();
         return;
     }
 
@@ -503,6 +502,46 @@ function cycleManualRotation() {
     if (btn) btn.innerHTML = `⟳ ${manualRotation}°`;
 }
 
+function checkFlashCapability() {
+    const btnFlash = document.getElementById("btn-flash-toggle");
+    if (!btnFlash) return;
+    if (!cameraStream) {
+        btnFlash.classList.add("hidden");
+        return;
+    }
+    const track = cameraStream.getVideoTracks()[0];
+    if (track.getCapabilities && track.getCapabilities().torch) {
+        btnFlash.classList.remove("hidden");
+    } else {
+        btnFlash.classList.add("hidden");
+    }
+    isFlashOn = false;
+    btnFlash.style.background = "rgba(0,0,0,0.5)";
+}
+
+async function toggleFlash() {
+    if (!cameraStream) return;
+    const track = cameraStream.getVideoTracks()[0];
+    try {
+        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+        if (!capabilities.torch) {
+            alert("Flash is not supported on this device/browser.");
+            return;
+        }
+        isFlashOn = !isFlashOn;
+        await track.applyConstraints({
+            advanced: [{ torch: isFlashOn }]
+        });
+        const btn = document.getElementById("btn-flash-toggle");
+        if (btn) {
+            btn.style.background = isFlashOn ? "rgba(255,215,0,0.8)" : "rgba(0,0,0,0.5)";
+        }
+    } catch (err) {
+        console.error("Flash error:", err);
+        alert("Failed to toggle flash: " + err.message);
+    }
+}
+
 async function startCamera() {
     if (cameraStream) return;
 
@@ -530,6 +569,8 @@ async function startCamera() {
         video.srcObject = cameraStream;
         video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
         document.getElementById("camera-overlay").classList.remove("hidden");
+
+        checkFlashCapability();
 
         if (cameraDevices.length === 0) {
             const devices = await navigator.mediaDevices.enumerateDevices();
@@ -596,6 +637,7 @@ async function manualSelectCamera() {
         });
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
+        checkFlashCapability();
     } catch (err) {
         alert("Failed to switch: " + err.message);
     }
@@ -615,6 +657,7 @@ async function switchCameraFace() {
         });
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
+        checkFlashCapability();
         if (currentFacingMode === "environment") {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
@@ -626,6 +669,7 @@ async function switchCameraFace() {
             cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: currentFacingMode } }, audio: false });
             const video = document.getElementById("camera-stream");
             video.srcObject = cameraStream;
+            checkFlashCapability();
         } catch (e) { alert("Camera Switch Failed: " + e.message); }
     }
 }
@@ -647,6 +691,7 @@ async function toggleWideMode() {
         });
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
+        checkFlashCapability();
         const btn = document.getElementById("btn-wide-toggle");
         btn.textContent = isWideActive ? "1x" : "0.5x";
     } catch (e) {
