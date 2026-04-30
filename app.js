@@ -38,7 +38,6 @@ let normalCameraIndex = -1;
 let wideCameraIndex = -1;
 let isWideActive = false;
 let currentFacingMode = "environment";
-let manualRotation = 0; // 0, 90, 180, 270
 let isFlashOn = false;
 
 // =============================================================
@@ -490,31 +489,12 @@ function updateTaskCount() {
 // =============================================================
 // CAMERA
 // =============================================================
-// =============================================================
-// CAMERA
-// =============================================================
-// =============================================================
-// CAMERA
-// =============================================================
-function cycleManualRotation() {
-    manualRotation = (manualRotation + 90) % 360;
-    const btn = document.getElementById("btn-manual-rotate");
-    if (btn) btn.innerHTML = `⟳ ${manualRotation}°`;
-}
-
 function checkFlashCapability() {
     const btnFlash = document.getElementById("btn-flash-toggle");
     if (!btnFlash) return;
-    if (!cameraStream) {
-        btnFlash.classList.add("hidden");
-        return;
-    }
-    const track = cameraStream.getVideoTracks()[0];
-    if (track.getCapabilities && track.getCapabilities().torch) {
-        btnFlash.classList.remove("hidden");
-    } else {
-        btnFlash.classList.add("hidden");
-    }
+    
+    // Always keep the flash button visible as requested, 
+    // it will show an alert if not supported upon clicking.
     isFlashOn = false;
     btnFlash.style.background = "rgba(0,0,0,0.5)";
 }
@@ -719,15 +699,9 @@ function capturePhoto() {
     const maxWidth = 2560;
     let w = video.videoWidth;
     let h = video.videoHeight;
-    // Determine rotation based on MANUAL override
+    
     let targetW = w;
     let targetH = h;
-
-    // If manual rotation implies swapping W/H (90 or 270 degrees)
-    if (manualRotation === 90 || manualRotation === 270) {
-        targetW = h;
-        targetH = w;
-    }
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -742,13 +716,7 @@ function capturePhoto() {
     ctx.save();
     ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
 
-    // Apply manual rotation
-    ctx.translate(targetW / 2, targetH / 2);
-    ctx.rotate(manualRotation * Math.PI / 180);
-
-    // Draw image centered in rotated context
-    // If rotated 90/270, we draw video with original w/h but centered
-    ctx.drawImage(video, -w / 2, -h / 2, w, h);
+    ctx.drawImage(video, 0, 0, targetW, targetH);
 
     ctx.restore();
     ctx.filter = "none";
