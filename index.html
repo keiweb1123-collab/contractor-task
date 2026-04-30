@@ -100,6 +100,10 @@
                         style="position:absolute; top:16px; right:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:16px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden;">⟳
                         0°</button>
 
+                    <!-- Flash Toggle Button -->
+                    <button id="btn-flash-toggle" onclick="toggleFlash()" title="Toggle Flash" class="hidden"
+                        style="position:absolute; top:16px; right:70px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:20px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">⚡</button>
+
                     <!-- Hidden permission button -->
                     <button id="btn-orientation" onclick="requestOrientationPermission()" class="hidden"></button>
 
@@ -157,8 +161,6 @@
                             <button class="task-btn"
                                 onclick="openTaskOption('Lean concrete', 'lean_concrete_targets')">🪨
                                 Lean Concrete</button>
-                            <button class="task-btn" onclick="openTaskOption('Repair', 'repair_targets')">🩹
-                                Repair</button>
 
                             <div class="separator">Finishing</div>
 
@@ -181,11 +183,8 @@
                                 Wall Tile</button>
                             <button class="task-btn" onclick="openTaskOption('Shadowline installation', 'floor')">📏
                                 Shadowline</button>
-                            <button class="task-btn" onclick="openTaskOption('Painting', 'painting_targets')">🎨
+                            <button class="task-btn" onclick="openTaskOption('Painting', 'painting_type')">🎨
                                 Painting</button>
-                            <button class="task-btn"
-                                onclick="openTaskOption('Repair (Finishing)', 'finishing_repair_targets')">🩹
-                                Repair</button>
                             <button class="task-btn"
                                 onclick="openTaskOption('Screeding', 'screeding_targets')">🏗️
                                 Screeding</button>
@@ -194,10 +193,15 @@
                                 Waterproofing for</button>
                             <button class="task-btn" onclick="openTaskOption('Opening', 'opening_targets')">🚪
                                 Opening</button>
+                            <button class="task-btn" onclick="openTaskOption('Butyl tape installation', 'floor')">🩹 Butyl Tape</button>
+                            <button class="task-btn" onclick="openTaskOption('Sanitary installation', 'floor')">🚽 Sanitary</button>
                             <button class="task-btn" onclick="addTaskDirect('Facade Installation')">🏢 Facade</button>
                             <button class="task-btn" onclick="addTaskDirect('General Cleaning')">🧹 Cleaning</button>
 
                             <div class="separator">Roof & Others</div>
+                            
+                            <button class="task-btn" onclick="addTaskDirect('GRC Installation on RF')">🏗️ GRC</button>
+                            <button class="task-btn" onclick="openTaskOption('Repair', 'repair_targets')">🩹 Repair</button>
 
                             <button class="task-btn" onclick="addTaskDirect('Parapet Installation')">🏠 Parapet</button>
                             <button class="task-btn" onclick="addTaskDirect('Trus Installation for roof')">📐 Roof
@@ -213,7 +217,7 @@
                             <button class="task-btn" onclick="addTaskDirect('Facade vertical steel installation')">🏢 Facade vertical</button>
                             <button class="task-btn" onclick="openTaskOption('Canopy', 'canopy_targets')">⛱️ Canopy</button>
                             <button class="task-btn" onclick="openTaskOption('Façade Steel Eaves', 'floor')">🏠 Façade Steel Eaves</button>
-                            <button class="task-btn" onclick="openTaskOption('Window', 'window_install_targets')">🪟 Window</button>
+                            <button class="task-btn" onclick="openTaskOption('Window', 'window_install_targets')">🪟 Window (YKK)</button>
                             <button class="task-btn" onclick="openTaskOption('Pool', 'pool_targets')">🏊 Pool</button>
                             <button class="task-btn" onclick="addTaskDirect('AC Installation')">❄️ AC</button>
                             <button class="task-btn" onclick="openTaskOption('Interior Work', 'floor')">🛋️ Interior</button>
