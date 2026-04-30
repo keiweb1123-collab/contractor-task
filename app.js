@@ -497,17 +497,13 @@ function checkFlashCapability() {
     // it will show an alert if not supported upon clicking.
     isFlashOn = false;
     btnFlash.style.background = "rgba(0,0,0,0.5)";
+    btnFlash.innerHTML = "<div style='position:relative;'>⚡<div style='position:absolute; top:50%; left:50%; width:2px; height:24px; background:white; transform:translate(-50%, -50%) rotate(45deg);'></div></div>";
 }
 
 async function toggleFlash() {
     if (!cameraStream) return;
     const track = cameraStream.getVideoTracks()[0];
     try {
-        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
-        if (!capabilities.torch) {
-            alert("Flash is not supported on this device/browser.");
-            return;
-        }
         isFlashOn = !isFlashOn;
         await track.applyConstraints({
             advanced: [{ torch: isFlashOn }]
@@ -515,8 +511,10 @@ async function toggleFlash() {
         const btn = document.getElementById("btn-flash-toggle");
         if (btn) {
             btn.style.background = isFlashOn ? "rgba(255,215,0,0.8)" : "rgba(0,0,0,0.5)";
+            btn.innerHTML = isFlashOn ? "⚡" : "<div style='position:relative;'>⚡<div style='position:absolute; top:50%; left:50%; width:2px; height:24px; background:white; transform:translate(-50%, -50%) rotate(45deg);'></div></div>";
         }
     } catch (err) {
+        isFlashOn = !isFlashOn;
         console.error("Flash error:", err);
         alert("Failed to toggle flash: " + err.message);
     }
