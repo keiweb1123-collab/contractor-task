@@ -14,13 +14,32 @@
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
 
-    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="stylesheet" href="style.css?v=3">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
         rel="stylesheet">
+    <style>
+        /* Critical fallback in case style.css fails to load (e.g. some preview sandboxes) */
+        .hidden { display: none !important; }
+
+        /* Print / Save-as-PDF styles — only the report cards print, no UI chrome */
+        @media print {
+            header, #unit-grid, #input-section, #option-modal, .export-bar { display: none !important; }
+            .action-row, button { display: none !important; }
+            body { padding: 10px !important; background: #fff !important; }
+            .container { max-width: 100% !important; margin: 0 !important; }
+            .report-card {
+                page-break-inside: avoid;
+                break-inside: avoid;
+                box-shadow: none !important;
+                border: 1px solid #ccc !important;
+                margin-bottom: 12px !important;
+            }
+            .preview-img { max-height: 180px !important; }
+            #print-header { display: block !important; margin-bottom: 16px; font-weight: 800; font-size: 1.2rem; }
+        }
+        @media screen { #print-header { display: none; } }
+    </style>
 </head>
-<!-- ... -->
-<!-- PWA Install Prompt Logic could go here -->
-<script src="app.js?v=18"></script>
 
 <body>
 
@@ -99,9 +118,6 @@
                     <button id="btn-flash-toggle" onclick="toggleFlash()" title="Toggle Flash"
                         style="position:absolute; top:16px; right:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:20px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">⚡</button>
 
-                    <!-- Hidden permission button -->
-                    <button id="btn-orientation" onclick="requestOrientationPermission()" class="hidden"></button>
-
                     <!-- Camera Selection Dropdown -->
                     <div style="position:absolute; top:70px; left:16px; z-index:5010;">
                         <select id="camera-select" onchange="manualSelectCamera()"
@@ -127,6 +143,10 @@
 
                 <!-- TASK TAB -->
                 <div id="task-tab" class="tab-content hidden">
+                    <button id="copy-yesterday-btn" class="hidden" onclick="copyYesterdayTasks()"
+                        style="background:#0ea5e9; color:white; width:100%; padding:14px; border:none; border-radius:12px; font-weight:700; font-size:1rem; margin-bottom:16px; box-shadow:0 2px 6px rgba(0,0,0,0.15); cursor:pointer;">
+                        📋 Copy Yesterday's Tasks
+                    </button>
                     <div class="form-group">
                         <span class="label">Current Tasks</span>
                         <div id="task-list-display" class="task-list-display">
@@ -190,6 +210,7 @@
                                 Opening</button>
                             <button class="task-btn" onclick="openTaskOption('Butyl tape installation', 'floor')">🩹 Butyl Tape</button>
                             <button class="task-btn" onclick="openTaskOption('Sanitary installation', 'floor')">🚽 Sanitary</button>
+                            <button class="task-btn" onclick="openTaskOption('Dike', 'dike_targets')">🚧 Dike</button>
                             <button class="task-btn" onclick="addTaskDirect('Facade Installation')">🏢 Facade</button>
                             <button class="task-btn" onclick="addTaskDirect('General Cleaning')">🧹 Cleaning</button>
 
@@ -258,7 +279,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=37"></script>
+    <script src="app.js?v=42"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>
