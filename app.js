@@ -52,12 +52,12 @@ function getDateKey(d) {
 }
 
 function revokePreviewUrls() {
-    previewObjectUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) {} });
+    previewObjectUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) { } });
     previewObjectUrls = [];
 }
 
 function revokeReportUrls() {
-    reportObjectUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) {} });
+    reportObjectUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) { } });
     reportObjectUrls = [];
 }
 
@@ -379,7 +379,7 @@ function confirmModalSelection() {
         else if (pendingTaskCategory === 'waterproofing_targets') prefix = 'Waterproofing for';
         else if (pendingTaskCategory === 'dike_targets') prefix = '';
         else prefix = `${pendingTaskName} for`;
-        
+
         let finalStr = prefix ? `${prefix} ${joinedSelection}` : joinedSelection;
         if (pendingTaskCategory === 'repair_targets') finalStr = `Repairing ${joinedSelection}`;
 
@@ -438,7 +438,7 @@ function confirmModalSelection() {
         const specialItems = [];
         if (pendingOptions.has("outside wall") || pendingOptions.has("Outside wall")) specialItems.push("Outside wall");
         if (pendingOptions.has("Facade")) specialItems.push("Facade");
-        
+
         if (pendingOptions.has("Lift")) {
             addTaskDirect(`${pendingTaskName} for Inside of the lift`);
         }
@@ -583,7 +583,7 @@ function updateTaskCount() {
 function checkFlashCapability() {
     const btnFlash = document.getElementById("btn-flash-toggle");
     if (!btnFlash) return;
-    
+
     // Always keep the flash button visible as requested, 
     // it will show an alert if not supported upon clicking.
     isFlashOn = false;
@@ -780,7 +780,7 @@ function capturePhoto() {
     const maxWidth = 2560;
     let w = video.videoWidth;
     let h = video.videoHeight;
-    
+
     let targetW = w;
     let targetH = h;
 
@@ -806,7 +806,7 @@ function capturePhoto() {
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
     addWatermark(ctx, canvas, selectedUnit, floorText);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.8); // 0.8 = good balance of quality vs size
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85); // 0.85 = good quality, slightly smaller size
     savePhoto(dataUrl);
     closeCameraOverlay();
 }
@@ -1201,64 +1201,53 @@ async function generateContractorReportData(contractor) {
     return { text: fullText, photoData: allPhotoData };
 }
 
-// Cap files per share to avoid share-sheet failures (WhatsApp gets unstable above ~10)
-const SHARE_FILE_LIMIT = 10;
-
+// Share ALL photos at once via native share sheet
 async function shareToWhatsApp(contractor) {
     const { text, photoData } = await generateContractorReportData(contractor);
 
-    const limited = (photoData || []).slice(0, SHARE_FILE_LIMIT);
-    const skipped = (photoData || []).length - limited.length;
-
-    const files = [];
+    // Prepare ALL photos as File objects
+    const allFiles = [];
     const dateStr = getDateKey().replace(/-/g, '');
-    for (let i = 0; i < limited.length; i++) {
+    for (let i = 0; i < (photoData || []).length; i++) {
         try {
-            const res = await fetch(limited[i].url);
+            const res = await fetch(photoData[i].url);
             const blob = await res.blob();
-            const filename = `${dateStr}_${limited[i].unit}_${i + 1}.jpg`;
-            files.push(new File([blob], filename, { type: 'image/jpeg' }));
+            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
+            allFiles.push(new File([blob], filename, { type: 'image/jpeg' }));
         } catch (e) { console.error('Photo convert failed:', e); }
     }
 
-    const shareText = skipped > 0
-        ? `${text}\n\n(+${skipped} more photos — use 📥 Save Photos to get all)`
-        : text;
-
-    // Step 1: native share sheet WITH files
-    if (navigator.share && files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
+    // Share all files at once
+    if (navigator.share && allFiles.length > 0 && navigator.canShare && navigator.canShare({ files: allFiles })) {
         try {
-            await navigator.share({ title: 'Construction Report', text: shareText, files });
+            await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
             return;
         } catch (err) {
-            if (err.name === 'AbortError') return; // user cancelled — don't retry
-            console.warn('Share-with-files failed, falling back:', err);
-            // fall through
+            if (err.name === 'AbortError') return; // user cancelled
+            console.warn('Share with files failed, falling back:', err);
         }
     }
 
-    // Step 2: native share sheet TEXT ONLY (more reliable)
+    // Fallback: native share TEXT ONLY
     if (navigator.share) {
         try {
-            await navigator.share({ title: 'Construction Report', text: shareText });
+            await navigator.share({ title: 'Construction Report', text: text });
             return;
         } catch (err) {
             if (err.name === 'AbortError') return;
             console.warn('Share text-only failed, falling back:', err);
-            // fall through
         }
     }
 
-    // Step 3: copy text to clipboard, then open WhatsApp directly
+    // Final fallback: copy text + open WhatsApp deep link
     try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(shareText);
+            await navigator.clipboard.writeText(text);
         }
-    } catch (_) { /* clipboard might be unavailable — ignore */ }
+    } catch (_) { /* clipboard might be unavailable */ }
 
-    // whatsapp:// deep link (skips wa.me redirect risk). Use anchor click for better mobile compat.
     const a = document.createElement('a');
-    a.href = `whatsapp://send?text=${encodeURIComponent(shareText)}`;
+    a.href = `whatsapp://send?text=${encodeURIComponent(text)}`;
     a.target = '_blank';
     a.rel = 'noopener';
     document.body.appendChild(a);
@@ -1297,7 +1286,7 @@ function exportCSV() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 5000);
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) { } }, 5000);
 }
 
 function exportPDF() {
@@ -1312,50 +1301,30 @@ async function saveAllPhotos(contractor) {
         return;
     }
 
-    const files = [];
     const dateStr = getDateKey().replace(/-/g, '');
+
+    // Always use direct download — never navigator.share (which opens WhatsApp)
+    const tempUrls = [];
     for (let i = 0; i < photoData.length; i++) {
         try {
             const res = await fetch(photoData[i].url);
             const blob = await res.blob();
             const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-            files.push(new File([blob], filename, { type: 'image/jpeg' }));
+            const url = URL.createObjectURL(blob);
+            tempUrls.push(url);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            await new Promise(r => setTimeout(r, 300));
         } catch (e) {
-            console.error('Photo prepare failed:', e);
+            console.error('Photo save failed:', e);
         }
-    }
-
-    if (files.length === 0) {
-        alert("Failed to prepare photos.");
-        return;
-    }
-
-    // Prefer native share sheet (iOS: "Save to Photos", Android: "Save to Gallery")
-    if (navigator.canShare && navigator.canShare({ files })) {
-        try {
-            await navigator.share({ files, title: `${contractor} Photos (${dateStr})` });
-            return;
-        } catch (err) {
-            if (err.name === 'AbortError') return;
-            // fall through to download fallback
-        }
-    }
-
-    // Fallback: trigger individual downloads
-    const tempUrls = [];
-    for (const file of files) {
-        const url = URL.createObjectURL(file);
-        tempUrls.push(url);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        await new Promise(r => setTimeout(r, 250));
     }
     setTimeout(() => {
-        tempUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) {} });
+        tempUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) { } });
     }, 5000);
 }
 
