@@ -19,14 +19,36 @@
         rel="stylesheet">
     <style>
         /* Critical fallback in case style.css fails to load (e.g. some preview sandboxes) */
-        .hidden { display: none !important; }
+        .hidden {
+            display: none !important;
+        }
 
         /* Print / Save-as-PDF styles — only the report cards print, no UI chrome */
         @media print {
-            header, #unit-grid, #input-section, #option-modal, .export-bar { display: none !important; }
-            .action-row, button { display: none !important; }
-            body { padding: 10px !important; background: #fff !important; }
-            .container { max-width: 100% !important; margin: 0 !important; }
+
+            header,
+            #unit-grid,
+            #input-section,
+            #option-modal,
+            .export-bar {
+                display: none !important;
+            }
+
+            .action-row,
+            button {
+                display: none !important;
+            }
+
+            body {
+                padding: 10px !important;
+                background: #fff !important;
+            }
+
+            .container {
+                max-width: 100% !important;
+                margin: 0 !important;
+            }
+
             .report-card {
                 page-break-inside: avoid;
                 break-inside: avoid;
@@ -34,10 +56,24 @@
                 border: 1px solid #ccc !important;
                 margin-bottom: 12px !important;
             }
-            .preview-img { max-height: 180px !important; }
-            #print-header { display: block !important; margin-bottom: 16px; font-weight: 800; font-size: 1.2rem; }
+
+            .preview-img {
+                max-height: 180px !important;
+            }
+
+            #print-header {
+                display: block !important;
+                margin-bottom: 16px;
+                font-weight: 800;
+                font-size: 1.2rem;
+            }
         }
-        @media screen { #print-header { display: none; } }
+
+        @media screen {
+            #print-header {
+                display: none;
+            }
+        }
     </style>
 </head>
 
@@ -200,24 +236,26 @@
                                 Shadowline</button>
                             <button class="task-btn" onclick="openTaskOption('Painting', 'painting_type')">🎨
                                 Painting</button>
-                            <button class="task-btn"
-                                onclick="openTaskOption('Screeding', 'screeding_targets')">🏗️
+                            <button class="task-btn" onclick="openTaskOption('Screeding', 'screeding_targets')">🏗️
                                 Screeding</button>
                             <button class="task-btn"
                                 onclick="openTaskOption('Waterproofing for', 'waterproofing_targets')">💧
                                 Waterproofing for</button>
                             <button class="task-btn" onclick="openTaskOption('Opening', 'opening_targets')">🚪
                                 Opening</button>
-                            <button class="task-btn" onclick="openTaskOption('Butyl tape installation', 'floor')">🩹 Butyl Tape</button>
-                            <button class="task-btn" onclick="openTaskOption('Sanitary installation', 'floor')">🚽 Sanitary</button>
+                            <button class="task-btn" onclick="openTaskOption('Butyl tape installation', 'floor')">🩹
+                                Butyl Tape</button>
+                            <button class="task-btn" onclick="openTaskOption('Sanitary installation', 'floor')">🚽
+                                Sanitary</button>
                             <button class="task-btn" onclick="openTaskOption('Dike', 'dike_targets')">🚧 Dike</button>
                             <button class="task-btn" onclick="addTaskDirect('Facade Installation')">🏢 Facade</button>
                             <button class="task-btn" onclick="addTaskDirect('General Cleaning')">🧹 Cleaning</button>
 
                             <div class="separator">Roof & Others</div>
-                            
+
                             <button class="task-btn" onclick="addTaskDirect('GRC Installation on RF')">🏗️ GRC</button>
-                            <button class="task-btn" onclick="openTaskOption('Repair', 'repair_targets')">🩹 Repair</button>
+                            <button class="task-btn" onclick="openTaskOption('Repair', 'repair_targets')">🩹
+                                Repair</button>
 
                             <button class="task-btn" onclick="addTaskDirect('Parapet Installation')">🏠 Parapet</button>
                             <button class="task-btn" onclick="addTaskDirect('Trus Installation for roof')">📐 Roof
@@ -226,17 +264,26 @@
                                 Safety Net</button>
                             <div class="separator">SBO</div>
                             <button class="task-btn" onclick="addTaskDirect('Lift Installation')">🛗 Lift</button>
-                            <button class="task-btn" onclick="addTaskDirect('Outside wall Painting')">🎨 Ext. Paint</button>
-                            <button class="task-btn" onclick="openTaskOption('Door', 'door_install_targets')">🚪 Door</button>
-                            <button class="task-btn" onclick="openTaskOption('SPC tile installation', 'floor')">🧱 SPC</button>
-                            <button class="task-btn" onclick="openTaskOption('WPC ceiling installation', 'floor')">🪵 WPC</button>
-                            <button class="task-btn" onclick="addTaskDirect('Facade vertical steel installation')">🏢 Facade vertical</button>
-                            <button class="task-btn" onclick="openTaskOption('Canopy', 'canopy_targets')">⛱️ Canopy</button>
-                            <button class="task-btn" onclick="openTaskOption('Façade Steel Eaves', 'floor')">🏠 Façade Steel Eaves</button>
-                            <button class="task-btn" onclick="openTaskOption('Window', 'window_install_targets')">🪟 Window (YKK)</button>
+                            <button class="task-btn" onclick="addTaskDirect('Outside wall Painting')">🎨 Ext.
+                                Paint</button>
+                            <button class="task-btn" onclick="openTaskOption('Door', 'door_install_targets')">🚪
+                                Door</button>
+                            <button class="task-btn" onclick="openTaskOption('SPC tile installation', 'floor')">🧱
+                                SPC</button>
+                            <button class="task-btn" onclick="openTaskOption('WPC ceiling installation', 'floor')">🪵
+                                WPC</button>
+                            <button class="task-btn" onclick="addTaskDirect('Facade vertical steel installation')">🏢
+                                Facade vertical</button>
+                            <button class="task-btn" onclick="openTaskOption('Canopy', 'canopy_targets')">⛱️
+                                Canopy</button>
+                            <button class="task-btn" onclick="openTaskOption('Façade Steel Eaves', 'floor')">🏠 Façade
+                                Steel Eaves</button>
+                            <button class="task-btn" onclick="openTaskOption('Window', 'window_install_targets')">🪟
+                                Window (YKK)</button>
                             <button class="task-btn" onclick="openTaskOption('Pool', 'pool_targets')">🏊 Pool</button>
                             <button class="task-btn" onclick="addTaskDirect('AC Installation')">❄️ AC</button>
-                            <button class="task-btn" onclick="openTaskOption('Interior Work', 'floor')">🛋️ Interior</button>
+                            <button class="task-btn" onclick="openTaskOption('Interior Work', 'floor')">🛋️
+                                Interior</button>
                         </div>
 
                         <!-- Custom Task Input -->
