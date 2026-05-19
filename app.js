@@ -1135,8 +1135,8 @@ async function renderAllReports() {
             const saveBtn = card.querySelector('[data-action="save-photos"]');
 
             copyBtn.addEventListener('click', function () { copyText(this, text); });
-            waBtn.addEventListener('click', function () { shareToWhatsApp(contractor); });
-            saveBtn.addEventListener('click', function () { saveAllPhotos(contractor); });
+            waBtn.addEventListener('click', function () { shareToWhatsApp(text, photoData); });
+            saveBtn.addEventListener('click', function () { saveAllPhotos(photoData); });
 
             container.appendChild(card);
         }
@@ -1309,15 +1309,22 @@ async function generateContractorReportData(contractor) {
         const unitData = data[unit];
         for (const photo of unitData.photos) {
             let url = "";
-            if (typeof photo === 'string') url = photo;
+            let fileBlob = null;
+            if (typeof photo === 'string') {
+                url = photo;
+                try {
+                    fileBlob = await (await fetch(url)).blob();
+                } catch(e) {}
+            }
             else if (photo.type === 'db_ref') {
                 const blob = await getImageFromDB(photo.id);
                 if (blob) {
                     url = URL.createObjectURL(blob);
                     reportObjectUrls.push(url);
+                    fileBlob = blob;
                 }
             }
-            if (url) allPhotoData.push({ url, unit });
+            if (url) allPhotoData.push({ url, unit, blob: fileBlob });
         }
         if (unitData.tasks.length > 0) {
             body += `${unit}:\n`;
@@ -1333,20 +1340,16 @@ async function generateContractorReportData(contractor) {
 // Share to WhatsApp
 // - With photos: navigator.share (share sheet → pick WhatsApp → text+images)
 // - Without photos: whatsapp:// deep link (opens WhatsApp directly → text only)
-async function shareToWhatsApp(contractor) {
-    const { text, photoData } = await generateContractorReportData(contractor);
-
+async function shareToWhatsApp(text, photoData) {
     // If photos exist, use navigator.share to include images
     if (photoData && photoData.length > 0 && navigator.share) {
         const allFiles = [];
         const dateStr = getDateKey().replace(/-/g, '');
         for (let i = 0; i < photoData.length; i++) {
-            try {
-                const res = await fetch(photoData[i].url);
-                const blob = await res.blob();
+            if (photoData[i].blob) {
                 const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-                allFiles.push(new File([blob], filename, { type: 'image/jpeg' }));
-            } catch (e) { console.error('Photo convert failed:', e); }
+                allFiles.push(new File([photoData[i].blob], filename, { type: 'image/jpeg' }));
+            }
         }
 
         if (allFiles.length > 0) {
@@ -1357,14 +1360,7 @@ async function shareToWhatsApp(contractor) {
             } catch (err) {
                 if (err.name === 'AbortError') return;
                 console.warn('Share with files failed:', err);
-                // Try text-only via navigator.share as second attempt
-                try {
-                    await navigator.share({ title: 'Construction Report', text: text });
-                    return;
-                } catch (err2) {
-                    if (err2.name === 'AbortError') return;
-                    console.warn('Share text-only also failed, using deep link:', err2);
-                }
+                // Fallthrough to text-only deep link
             }
         }
     }
@@ -1412,8 +1408,7 @@ function exportPDF() {
     window.print();
 }
 
-async function saveAllPhotos(contractor) {
-    const { photoData } = await generateContractorReportData(contractor);
+async function saveAllPhotos(photoData) {
     if (!photoData || photoData.length === 0) {
         alert("No photos to save.");
         return;
