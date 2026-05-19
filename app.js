@@ -1330,12 +1330,14 @@ async function generateContractorReportData(contractor) {
     return { text: fullText, photoData: allPhotoData };
 }
 
-// Share to WhatsApp — photos via native share, text always opens WA directly
+// Share to WhatsApp
+// - With photos: navigator.share (share sheet → pick WhatsApp → text+images)
+// - Without photos: whatsapp:// deep link (opens WhatsApp directly → text only)
 async function shareToWhatsApp(contractor) {
     const { text, photoData } = await generateContractorReportData(contractor);
 
-    // If there are photos, try native share with files (shows share sheet with WA option)
-    if (photoData && photoData.length > 0 && navigator.share && navigator.canShare) {
+    // If photos exist, use navigator.share to include images
+    if (photoData && photoData.length > 0 && navigator.share) {
         const allFiles = [];
         const dateStr = getDateKey().replace(/-/g, '');
         for (let i = 0; i < photoData.length; i++) {
@@ -1346,18 +1348,28 @@ async function shareToWhatsApp(contractor) {
                 allFiles.push(new File([blob], filename, { type: 'image/jpeg' }));
             } catch (e) { console.error('Photo convert failed:', e); }
         }
-        if (allFiles.length > 0 && navigator.canShare({ files: allFiles })) {
+
+        if (allFiles.length > 0) {
             try {
+                // Try sharing text + photos together
                 await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
                 return;
             } catch (err) {
                 if (err.name === 'AbortError') return;
-                console.warn('Share with files failed, falling back to WA link:', err);
+                console.warn('Share with files failed:', err);
+                // Try text-only via navigator.share as second attempt
+                try {
+                    await navigator.share({ title: 'Construction Report', text: text });
+                    return;
+                } catch (err2) {
+                    if (err2.name === 'AbortError') return;
+                    console.warn('Share text-only also failed, using deep link:', err2);
+                }
             }
         }
     }
 
-    // Open WhatsApp directly via deep link (no web page, no caching issues)
+    // No photos or share failed → open WhatsApp directly with text
     openWhatsAppWithText(text);
 }
 
