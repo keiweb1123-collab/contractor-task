@@ -1341,8 +1341,16 @@ async function generateContractorReportData(contractor) {
 // - With photos: navigator.share (share sheet → pick WhatsApp → text+images)
 // - Without photos: whatsapp:// deep link (opens WhatsApp directly → text only)
 async function shareToWhatsApp(text, photoData) {
-    // If photos exist, use navigator.share to include images
-    if (photoData && photoData.length > 0 && navigator.share) {
+    if (!navigator.share) {
+        // Desktop or unsupported browser fallback
+        openWhatsAppWithText(text);
+        return;
+    }
+
+    let shared = false;
+
+    // 1. Try to share with photos if they exist
+    if (photoData && photoData.length > 0) {
         const allFiles = [];
         const dateStr = getDateKey().replace(/-/g, '');
         for (let i = 0; i < photoData.length; i++) {
@@ -1354,19 +1362,26 @@ async function shareToWhatsApp(text, photoData) {
 
         if (allFiles.length > 0) {
             try {
-                // Try sharing text + photos together
                 await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
-                return;
+                shared = true;
             } catch (err) {
-                if (err.name === 'AbortError') return;
-                console.warn('Share with files failed:', err);
-                // Fallthrough to text-only deep link
+                if (err.name === 'AbortError') return; // User cancelled
+                console.warn('Share with files failed, trying text only:', err);
             }
         }
     }
 
-    // No photos or share failed → open WhatsApp directly with text
-    openWhatsAppWithText(text);
+    // 2. If no photos, or sharing photos failed, try text-only via Share Sheet
+    if (!shared) {
+        try {
+            await navigator.share({ title: 'Construction Report', text: text });
+        } catch (err) {
+            if (err.name === 'AbortError') return; // User cancelled
+            console.warn('Share text-only failed, falling back to deep link:', err);
+            // 3. Final fallback: deep link
+            openWhatsAppWithText(text);
+        }
+    }
 }
 
 function exportCSV() {
