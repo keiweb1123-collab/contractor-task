@@ -778,7 +778,8 @@ function capturePhoto() {
     const canvas = document.getElementById("camera-canvas");
     if (!cameraStream) return;
 
-    const maxWidth = 2560;
+    // Reduce maxWidth to avoid OS-level payload limits when sharing many photos
+    const maxWidth = 1280;
     let w = video.videoWidth;
     let h = video.videoHeight;
 
@@ -807,7 +808,8 @@ function capturePhoto() {
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
     addWatermark(ctx, canvas, selectedUnit, floorText);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.85); // 0.85 = good quality, slightly smaller size
+    // Compress more to ensure sharing many photos at once doesn't crash the OS intent
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
     savePhoto(dataUrl);
     closeCameraOverlay();
 }
