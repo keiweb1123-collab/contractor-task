@@ -42,6 +42,7 @@ let isFlashOn = false;
 let yesterdayReport = null; // { date, data } — text-only snapshot
 let previewObjectUrls = [];
 let reportObjectUrls = [];
+let overtimeData = {};  // { "IADECCO": "◯"|"×", "YAMATO": "◯"|"×", "INTI INDAH": "◯"|"×" }
 
 function getDateKey(d) {
     d = d || new Date();
@@ -934,7 +935,8 @@ async function saveLocalData() {
         const payload = {
             id: STORAGE_KEY,
             today: { date: todayKey, data: currentReport },
-            yesterday: yesterdayReport
+            yesterday: yesterdayReport,
+            overtime: overtimeData
         };
         const db = await openDB();
         const tx = db.transaction(DB_STORE, "readwrite");
@@ -981,15 +983,18 @@ async function loadLocalData() {
         if (todayRec && todayRec.date === todayKey) {
             currentReport = todayRec.data || {};
             yesterdayReport = yRec;
+            overtimeData = result.overtime || {};
         } else if (todayRec && todayRec.date && todayRec.date !== todayKey) {
             // Day rolled over — promote today's text to yesterday, drop photos, start fresh today
             yesterdayReport = { date: todayRec.date, data: stripPhotos(todayRec.data) };
             currentReport = {};
+            overtimeData = {};
             await clearAllStoredImages();
             await saveLocalData();
         } else {
             currentReport = {};
             yesterdayReport = yRec;
+            overtimeData = result.overtime || {};
         }
     } catch (e) { console.error("IndexedDB load failed:", e); }
 }
@@ -1111,23 +1116,144 @@ async function renderAllReports() {
             }
             imagesHtml += `</div>`;
 
-            const savePhotosBtn = `<button class="copy-btn" onclick="saveAllPhotos('${contractor}')" style="background:#4f46e5; color:white;">📥 Save Photos</button>`;
-
+            // Build card HTML without embedding text into onclick attributes
+            // (text with newlines/quotes/backticks was breaking HTML attribute parsing)
             card.innerHTML = `
                 <div class="report-header"><h3>${contractor}</h3></div>
                 <div class="report-content">${text}</div>
                 <div class="action-row" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
-                    <button class="copy-btn" onclick="copyText(this, \`${text.replace(/`/g, "\\`")}\`)">📋 Copy Text</button>
-                    <button class="copy-btn" onclick="shareToWhatsApp('${contractor}')" style="background:#25D366; color:white;">💬 Share to WA</button>
-                    ${savePhotosBtn}
+                    <button class="copy-btn" data-action="copy">📋 Copy Text</button>
+                    <button class="copy-btn" data-action="share-wa" style="background:#25D366; color:white;">💬 Share to WA</button>
+                    <button class="copy-btn" data-action="save-photos" style="background:#4f46e5; color:white;">📥 Save Photos</button>
                 </div>
                 <div style="margin-top:10px">${imagesHtml}</div>
             `;
+
+            // Attach event listeners safely via DOM (avoids inline onclick text-escaping bugs)
+            const copyBtn = card.querySelector('[data-action="copy"]');
+            const waBtn = card.querySelector('[data-action="share-wa"]');
+            const saveBtn = card.querySelector('[data-action="save-photos"]');
+
+            copyBtn.addEventListener('click', function () { copyText(this, text); });
+            waBtn.addEventListener('click', function () { shareToWhatsApp(contractor); });
+            saveBtn.addEventListener('click', function () { saveAllPhotos(contractor); });
+
             container.appendChild(card);
         }
     }
 
+    renderOvertimeSection(container);
     renderYesterdaySection(container);
+}
+
+// =============================================================
+// OVERTIME SECTION
+// =============================================================
+function renderOvertimeSection(container) {
+    const contractors = ["IADECCO", "YAMATO", "INTI INDAH"];
+
+    const section = document.createElement("div");
+    section.className = "overtime-section";
+    section.style.cssText = "margin-top:24px; padding:20px; background:linear-gradient(135deg, #1e293b, #334155); border-radius:16px; box-shadow:0 4px 16px rgba(0,0,0,0.2);";
+
+    let togglesHtml = '';
+    contractors.forEach(c => {
+        const current = overtimeData[c] || null;
+        const isYes = current === '◯';
+        const isNo = current === '×';
+        togglesHtml += `
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.1);">
+                <span style="color:#e2e8f0; font-weight:700; font-size:1rem;">${c}</span>
+                <div style="display:flex; gap:8px;">
+                    <button class="ot-btn" data-contractor="${c}" data-value="◯"
+                        style="width:44px; height:44px; border-radius:50%; border:2px solid ${isYes ? '#22c55e' : '#475569'}; background:${isYes ? 'rgba(34,197,94,0.25)' : 'transparent'}; color:${isYes ? '#22c55e' : '#94a3b8'}; font-size:20px; font-weight:900; cursor:pointer; transition:all 0.2s;">◯</button>
+                    <button class="ot-btn" data-contractor="${c}" data-value="×"
+                        style="width:44px; height:44px; border-radius:50%; border:2px solid ${isNo ? '#ef4444' : '#475569'}; background:${isNo ? 'rgba(239,68,68,0.25)' : 'transparent'}; color:${isNo ? '#ef4444' : '#94a3b8'}; font-size:20px; font-weight:900; cursor:pointer; transition:all 0.2s;">×</button>
+                </div>
+            </div>
+        `;
+    });
+
+    section.innerHTML = `
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+            <h3 style="color:white; font-weight:900; font-size:1.2rem; margin:0;">⏰ Overtime</h3>
+        </div>
+        <div class="overtime-toggles">${togglesHtml}</div>
+        <div style="margin-top:14px; display:flex; gap:8px;">
+            <button class="copy-btn" data-action="ot-copy" style="flex:1; background:rgba(255,255,255,0.1); color:white; border:1px solid rgba(255,255,255,0.2);">📋 Copy</button>
+            <button class="copy-btn" data-action="ot-wa" style="flex:1; background:#25D366; color:white;">💬 Share to WA</button>
+        </div>
+    `;
+
+    // Attach toggle event listeners
+    section.querySelectorAll('.ot-btn').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const contractor = this.dataset.contractor;
+            const value = this.dataset.value;
+            // Toggle: if already selected, deselect; otherwise set
+            if (overtimeData[contractor] === value) {
+                delete overtimeData[contractor];
+            } else {
+                overtimeData[contractor] = value;
+            }
+            saveLocalData();
+            renderAllReports();
+        });
+    });
+
+    // Copy button
+    const copyBtn = section.querySelector('[data-action="ot-copy"]');
+    copyBtn.addEventListener('click', function () {
+        const text = generateOvertimeText();
+        copyText(this, text);
+    });
+
+    // WA share button
+    const waBtn = section.querySelector('[data-action="ot-wa"]');
+    waBtn.addEventListener('click', function () {
+        shareOvertimeToWA();
+    });
+
+    container.appendChild(section);
+}
+
+function generateOvertimeText() {
+    const contractors = ["IADECCO", "YAMATO", "INTI INDAH"];
+    let lines = ["Overtime"];
+    contractors.forEach(c => {
+        const val = overtimeData[c] || '-';
+        lines.push(`${c}：${val}`);
+    });
+    return lines.join('\n');
+}
+
+async function shareOvertimeToWA() {
+    const text = generateOvertimeText();
+
+    if (navigator.share) {
+        try {
+            await navigator.share({ title: 'Overtime Report', text: text });
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.warn('Share failed, falling back:', err);
+        }
+    }
+
+    // Fallback: open WhatsApp deep link
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        }
+    } catch (_) { }
+
+    const a = document.createElement('a');
+    a.href = `whatsapp://send?text=${encodeURIComponent(text)}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 
 function renderYesterdaySection(container) {
@@ -1162,9 +1288,11 @@ function renderYesterdaySection(container) {
             <div class="report-header"><h3>${contractor}</h3></div>
             <div class="report-content">${fullText}</div>
             <div class="action-row" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
-                <button class="copy-btn" onclick="copyText(this, \`${fullText.replace(/`/g, "\\`")}\`)">📋 Copy Text</button>
+                <button class="copy-btn" data-action="copy">📋 Copy Text</button>
             </div>
         `;
+        const copyBtn = card.querySelector('[data-action="copy"]');
+        copyBtn.addEventListener('click', function () { copyText(this, fullText); });
         section.appendChild(card);
     }
     container.appendChild(section);
