@@ -1185,7 +1185,7 @@ function renderOvertimeSection(container) {
         </div>
     `;
 
-    // Attach toggle event listeners
+    // Attach toggle event listeners (update styles in-place, no full re-render)
     section.querySelectorAll('.ot-btn').forEach(btn => {
         btn.addEventListener('click', function () {
             const contractor = this.dataset.contractor;
@@ -1197,7 +1197,23 @@ function renderOvertimeSection(container) {
                 overtimeData[contractor] = value;
             }
             saveLocalData();
-            renderAllReports();
+            // Update all buttons in this section in-place (no page re-render)
+            section.querySelectorAll('.ot-btn').forEach(b => {
+                const c = b.dataset.contractor;
+                const v = b.dataset.value;
+                const cur = overtimeData[c] || null;
+                if (v === '◯') {
+                    const active = cur === '◯';
+                    b.style.borderColor = active ? '#22c55e' : '#475569';
+                    b.style.background = active ? 'rgba(34,197,94,0.25)' : 'transparent';
+                    b.style.color = active ? '#22c55e' : '#94a3b8';
+                } else {
+                    const active = cur === '×';
+                    b.style.borderColor = active ? '#ef4444' : '#475569';
+                    b.style.background = active ? 'rgba(239,68,68,0.25)' : 'transparent';
+                    b.style.color = active ? '#ef4444' : '#94a3b8';
+                }
+            });
         });
     });
 
@@ -1229,31 +1245,8 @@ function generateOvertimeText() {
 
 async function shareOvertimeToWA() {
     const text = generateOvertimeText();
-
-    if (navigator.share) {
-        try {
-            await navigator.share({ title: 'Overtime Report', text: text });
-            return;
-        } catch (err) {
-            if (err.name === 'AbortError') return;
-            console.warn('Share failed, falling back:', err);
-        }
-    }
-
-    // Fallback: open WhatsApp deep link
-    try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(text);
-        }
-    } catch (_) { }
-
-    const a = document.createElement('a');
-    a.href = `whatsapp://send?text=${encodeURIComponent(text)}`;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // Open WhatsApp directly (not generic share sheet)
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
 }
 
 function renderYesterdaySection(container) {
@@ -1329,58 +1322,35 @@ async function generateContractorReportData(contractor) {
     return { text: fullText, photoData: allPhotoData };
 }
 
-// Share ALL photos at once via native share sheet
+// Share to WhatsApp — photos via native share, text always opens WA directly
 async function shareToWhatsApp(contractor) {
     const { text, photoData } = await generateContractorReportData(contractor);
 
-    // Prepare ALL photos as File objects
-    const allFiles = [];
-    const dateStr = getDateKey().replace(/-/g, '');
-    for (let i = 0; i < (photoData || []).length; i++) {
-        try {
-            const res = await fetch(photoData[i].url);
-            const blob = await res.blob();
-            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-            allFiles.push(new File([blob], filename, { type: 'image/jpeg' }));
-        } catch (e) { console.error('Photo convert failed:', e); }
-    }
-
-    // Share all files at once
-    if (navigator.share && allFiles.length > 0 && navigator.canShare && navigator.canShare({ files: allFiles })) {
-        try {
-            await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
-            return;
-        } catch (err) {
-            if (err.name === 'AbortError') return; // user cancelled
-            console.warn('Share with files failed, falling back:', err);
+    // If there are photos, try native share with files (shows share sheet with WA option)
+    if (photoData && photoData.length > 0 && navigator.share && navigator.canShare) {
+        const allFiles = [];
+        const dateStr = getDateKey().replace(/-/g, '');
+        for (let i = 0; i < photoData.length; i++) {
+            try {
+                const res = await fetch(photoData[i].url);
+                const blob = await res.blob();
+                const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
+                allFiles.push(new File([blob], filename, { type: 'image/jpeg' }));
+            } catch (e) { console.error('Photo convert failed:', e); }
+        }
+        if (allFiles.length > 0 && navigator.canShare({ files: allFiles })) {
+            try {
+                await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
+                return;
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                console.warn('Share with files failed, falling back to WA link:', err);
+            }
         }
     }
 
-    // Fallback: native share TEXT ONLY
-    if (navigator.share) {
-        try {
-            await navigator.share({ title: 'Construction Report', text: text });
-            return;
-        } catch (err) {
-            if (err.name === 'AbortError') return;
-            console.warn('Share text-only failed, falling back:', err);
-        }
-    }
-
-    // Final fallback: copy text + open WhatsApp deep link
-    try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(text);
-        }
-    } catch (_) { /* clipboard might be unavailable */ }
-
-    const a = document.createElement('a');
-    a.href = `whatsapp://send?text=${encodeURIComponent(text)}`;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // Open WhatsApp directly with text (not generic share sheet)
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
 }
 
 function exportCSV() {
