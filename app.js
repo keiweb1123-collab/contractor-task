@@ -1243,10 +1243,18 @@ function generateOvertimeText() {
     return lines.join('\n');
 }
 
+function openWhatsAppWithText(text) {
+    const a = document.createElement('a');
+    a.href = `whatsapp://send?text=${encodeURIComponent(text)}`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
 async function shareOvertimeToWA() {
     const text = generateOvertimeText();
-    // Open WhatsApp directly (not generic share sheet)
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
+    openWhatsAppWithText(text);
 }
 
 function renderYesterdaySection(container) {
@@ -1349,8 +1357,8 @@ async function shareToWhatsApp(contractor) {
         }
     }
 
-    // Open WhatsApp directly with text (not generic share sheet)
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
+    // Open WhatsApp directly via deep link (no web page, no caching issues)
+    openWhatsAppWithText(text);
 }
 
 function exportCSV() {
