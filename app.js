@@ -1335,15 +1335,23 @@ async function renderAllReports() {
             }
             imagesHtml += `</div>`;
 
-            // Build one Share-to-WA button per group. Single-group case keeps
-            // the original label "💬 Share to WA" so nothing changes for
-            // contractors whose payload already fits (e.g. INTI INDAH).
+            // Build one Share-to-WA button per group. Label each by unit so
+            // the user can see which slice of the report is going where. If
+            // there is only one group, keep the original generic label.
             let shareButtonsHtml = '';
             if (shareGroups.length <= 1) {
                 shareButtonsHtml = `<button class="copy-btn" data-share-idx="0" style="background:#25D366; color:white;">💬 Share to WA</button>`;
             } else {
                 for (let g = 0; g < shareGroups.length; g++) {
-                    shareButtonsHtml += `<button class="copy-btn" data-share-idx="${g}" style="background:#25D366; color:white;">💬 Share to WA (${g + 1}/${shareGroups.length})</button>`;
+                    const grp = shareGroups[g];
+                    let label = '💬 ';
+                    if (grp.unit) {
+                        label += escapeHtml(grp.unit);
+                        if (grp.partTotal > 1) label += ` (${grp.partIndex + 1}/${grp.partTotal})`;
+                    } else {
+                        label += `Share to WA (${g + 1}/${shareGroups.length})`;
+                    }
+                    shareButtonsHtml += `<button class="copy-btn" data-share-idx="${g}" style="background:#25D366; color:white;">${label}</button>`;
                 }
             }
 
@@ -1618,96 +1626,77 @@ const MAX_BYTES_PER_SHARE = 4 * 1024 * 1024;
 
 function chunkUnitsForShare(contractor, unitBreakdown) {
     const dateStr = getDateKey().replace(/-/g, '');
-
-    // Build File objects per unit up front. Prefer the smaller `shareBlob`
-    // (when ready) so chunking decisions reflect the bytes that will actually
-    // be sent to navigator.share, not the larger original blob.
-    const unitsWithFiles = unitBreakdown.map(ub => {
-        const files = ub.photos
-            .filter(p => p.blob)
-            .map((p, i) => {
-                const src = p.shareBlob || p.blob;
-                return new File([src], `${dateStr}_${p.unit}_${i + 1}.jpg`, { type: 'image/jpeg' });
-            });
-        return { unit: ub.unit, taskText: ub.taskText, photos: ub.photos.filter(p => p.blob), files };
-    });
-
-    const canShareSet = (files) => {
-        if (!files || files.length === 0) return true;
-        if (!navigator.canShare) return true;
-        try { return navigator.canShare({ files }); } catch { return false; }
-    };
-    const totalBytes = (files) => files.reduce((s, f) => s + (f.size || 0), 0);
-    // A group is acceptable only if it passes ALL three checks:
-    //   1. OS-level canShare returns true
-    //   2. file count ≤ MAX_FILES_PER_SHARE
-    //   3. total bytes ≤ MAX_BYTES_PER_SHARE
-    // canShare alone is not sufficient — see the comment block above.
-    const fitsLimit = (files) =>
-        files.length <= MAX_FILES_PER_SHARE
-        && totalBytes(files) <= MAX_BYTES_PER_SHARE
-        && canShareSet(files);
-
-    const buildGroup = (units) => {
-        const lines = [contractor];
-        for (const u of units) {
-            if (u.taskText) lines.push(u.taskText.trimEnd());
-        }
-        return {
-            text: lines.join('\n').trim(),
-            files: units.flatMap(u => u.files),
-            photoData: units.flatMap(u => u.photos)
-        };
-    };
-
     const groups = [];
-    let currentUnits = [];
-    let currentFiles = [];
 
-    const flushCurrent = () => {
-        if (currentUnits.length > 0) groups.push(buildGroup(currentUnits));
-        currentUnits = [];
-        currentFiles = [];
-    };
+    // Strict per-unit grouping: every group represents exactly ONE unit so
+    // the recipient never sees two units' photos mixed under one report
+    // text. A unit with more than MAX_FILES_PER_SHARE photos is split into
+    // numbered sub-groups (1/2, 2/2, …) of its own; we never split it
+    // across other units.
+    for (const ub of unitBreakdown) {
+        const photosWithBlob = ub.photos.filter(p => p.blob);
+        const unitFiles = photosWithBlob.map((p, i) => {
+            const src = p.shareBlob || p.blob;
+            return new File([src], `${dateStr}_${p.unit}_${i + 1}.jpg`, { type: 'image/jpeg' });
+        });
+        const hasTask = !!ub.taskText;
 
-    for (const ub of unitsWithFiles) {
-        if (ub.files.length === 0) {
-            // Unit with no photos — keep its task text bundled with the current group
-            currentUnits.push(ub);
+        if (unitFiles.length === 0) {
+            // Unit has no photos. Emit a text-only group only if there are
+            // tasks worth sharing.
+            if (hasTask) {
+                groups.push({
+                    unit: ub.unit,
+                    text: `${contractor}\n${ub.taskText.trimEnd()}`.trim(),
+                    files: [],
+                    photoData: [],
+                    partIndex: 0,
+                    partTotal: 1
+                });
+            }
             continue;
         }
-        const tentative = currentFiles.concat(ub.files);
-        if (fitsLimit(tentative)) {
-            currentUnits.push(ub);
-            currentFiles = tentative;
-        } else {
-            flushCurrent();
-            if (fitsLimit(ub.files)) {
-                currentUnits = [ub];
-                currentFiles = ub.files.slice();
-            } else {
-                // A single unit's photos already exceed the cap. Split that
-                // unit's photos into sub-chunks of MAX_FILES_PER_SHARE each.
-                // The unit's task text rides on the first sub-chunk only so
-                // the recipient doesn't see the same task list repeated.
-                for (let start = 0; start < ub.files.length; start += MAX_FILES_PER_SHARE) {
-                    const end = Math.min(start + MAX_FILES_PER_SHARE, ub.files.length);
-                    groups.push(buildGroup([{
-                        unit: ub.unit,
-                        taskText: start === 0 ? ub.taskText : "",
-                        photos: ub.photos.slice(start, end),
-                        files: ub.files.slice(start, end)
-                    }]));
-                }
+
+        // Unit has photos. Slice them into MAX_FILES_PER_SHARE-sized chunks,
+        // each becoming its own group. The first chunk carries the unit's
+        // task text; subsequent chunks just identify themselves as
+        // continuations so the message thread stays readable.
+        const totalChunks = Math.ceil(unitFiles.length / MAX_FILES_PER_SHARE);
+        for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+            const start = chunkIdx * MAX_FILES_PER_SHARE;
+            const end = Math.min(start + MAX_FILES_PER_SHARE, unitFiles.length);
+            const chunkFiles = unitFiles.slice(start, end);
+            const chunkPhotos = photosWithBlob.slice(start, end);
+
+            const lines = [contractor];
+            if (chunkIdx === 0 && hasTask) {
+                lines.push(ub.taskText.trimEnd());
+            } else if (chunkIdx > 0) {
+                lines.push(`${ub.unit} (写真 ${chunkIdx + 1}/${totalChunks})`);
             }
+
+            groups.push({
+                unit: ub.unit,
+                text: lines.join('\n').trim(),
+                files: chunkFiles,
+                photoData: chunkPhotos,
+                partIndex: chunkIdx,
+                partTotal: totalChunks
+            });
         }
     }
-    flushCurrent();
 
     if (groups.length === 0) {
-        // No units at all — produce one text-only group so the UI still
-        // renders a Share-to-WA button.
-        groups.push({ text: contractor, files: [], photoData: [] });
+        // Contractor with no units / nothing to share — still emit one group
+        // so the report card has a Share-to-WA button to copy the header.
+        groups.push({
+            unit: null,
+            text: contractor,
+            files: [],
+            photoData: [],
+            partIndex: 0,
+            partTotal: 1
+        });
     }
     return groups;
 }
