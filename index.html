@@ -83,7 +83,11 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
+            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v63</div>
         </header>
+
+        <!-- Diagnostic line: populated by renderShareDiag() when a share fails -->
+        <div id="share-diag" style="text-align:center; color:#dc2626; font-size:0.7rem; padding:0 8px 12px; word-break:break-all;"></div>
 
         <!-- Unit Selection Grid -->
         <div id="unit-grid" class="grid-container">
@@ -323,17 +327,10 @@
 
         <!-- Reports Section -->
         <div id="reports-container" class="reports-container"></div>
-
-        <!-- Version label (visible so we can verify cache busted) -->
-        <div style="text-align:center; color:#9ca3af; font-size:0.75rem; margin-top:24px; padding-bottom:4px;">
-            app v62
-        </div>
-        <!-- Diagnostic line: populated by renderShareDiag() when a share fails -->
-        <div id="share-diag" style="text-align:center; color:#dc2626; font-size:0.7rem; padding:0 8px 16px; word-break:break-all;"></div>
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=62"></script>
+    <script src="app.js?v=63"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>
