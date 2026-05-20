@@ -1634,17 +1634,35 @@ async function shareToWhatsApp(text, photoData) {
         await navigator.share(payload);
     } catch (err) {
         if (err.name === 'AbortError') return; // user cancelled — fine
-        console.warn('navigator.share failed:', err);
+
+        // Diagnostic: log the full error so it shows up in any attached
+        // remote debugger / web inspector.
+        console.error(
+            'navigator.share failed:',
+            err && err.name,
+            err && err.message,
+            { hasFiles: !!payload.files, fileCount: (payload.files || []).length, textLength: (text || '').length }
+        );
+
         if (!payload.files) {
-            // Text-only share failed for some non-cancel reason — deep link is
-            // still useful here since we have no photos to lose anyway.
+            // Text-only share failed for some non-cancel reason — deep link
+            // is the only remaining option and we have no photos to lose.
             openWhatsAppWithText(text);
-        } else {
-            // File share failed. Don't silently degrade to text-only or a deep
-            // link — that's exactly the misleading behavior we are trying to
-            // fix. Tell the user so they know to retry / reduce photos.
-            alert("写真付きで共有できませんでした。\n枚数が多すぎる可能性があります。\n別の方法(別アプリでの共有や写真の個別保存)をお試しください。");
+            return;
         }
+
+        // File share failed. Surface the error name in the confirm dialog so
+        // the user can report it back to us (it's the fastest path to a real
+        // root-cause fix). Offer the text-only deep-link fallback so the
+        // report at least reaches WhatsApp — photos can be sent separately
+        // via "Save Photos".
+        const errName = (err && err.name) ? err.name : 'unknown';
+        const proceed = confirm(
+            `写真付きで共有できませんでした (${errName})。\n\n` +
+            `テキストのみで WhatsApp を開きますか?\n` +
+            `写真は「📥 Save Photos」で個別保存して別送してください。`
+        );
+        if (proceed) openWhatsAppWithText(text);
     }
 }
 
