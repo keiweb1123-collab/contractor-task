@@ -1336,21 +1336,16 @@ async function renderAllReports() {
             imagesHtml += `</div>`;
 
             // Build one Share-to-WA button per group. Label shows the units
-            // that make up the group so the user can tell which slice each
-            // button sends. Single-group case keeps the generic label.
+            // that make up the group. Single-group case keeps the generic
+            // label. No "(n/N)" annotation — the user explicitly asked not
+            // to see one.
             let shareButtonsHtml = '';
             if (shareGroups.length <= 1) {
                 shareButtonsHtml = `<button class="copy-btn" data-share-idx="0" style="background:#25D366; color:white;">💬 Share to WA</button>`;
             } else {
                 for (let g = 0; g < shareGroups.length; g++) {
                     const grp = shareGroups[g];
-                    let label = '💬 ';
-                    if (grp.groupLabel) {
-                        label += escapeHtml(grp.groupLabel);
-                        if (grp.partTotal > 1) label += ` (${grp.partIndex + 1}/${grp.partTotal})`;
-                    } else {
-                        label += `Share to WA (${g + 1}/${shareGroups.length})`;
-                    }
+                    const label = '💬 ' + (grp.groupLabel ? escapeHtml(grp.groupLabel) : 'Share to WA');
                     shareButtonsHtml += `<button class="copy-btn" data-share-idx="${g}" style="background:#25D366; color:white;">${label}</button>`;
                 }
             }
@@ -1711,9 +1706,10 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         }
 
         // Too many photos for this plan group → sub-chunk by file count.
-        // The first sub-chunk carries the full task text for the group;
-        // subsequent sub-chunks just say "GroupLabel (写真 n/N)" so the
-        // recipient sees a clear continuation.
+        // First sub-chunk carries the full task text; subsequent ones go
+        // out with just the contractor header so the recipient sees the
+        // same identity without a "1/2"-style annotation that the user
+        // explicitly didn't want.
         const totalParts = Math.ceil(groupFiles.length / MAX_FILES_PER_SHARE);
         for (let partIdx = 0; partIdx < totalParts; partIdx++) {
             const start = partIdx * MAX_FILES_PER_SHARE;
@@ -1724,8 +1720,6 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
             const lines = [contractor];
             if (partIdx === 0) {
                 lines.push(...taskLines);
-            } else {
-                lines.push(`${groupLabel} (写真 ${partIdx + 1}/${totalParts})`);
             }
 
             groups.push({
