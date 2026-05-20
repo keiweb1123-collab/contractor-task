@@ -12,7 +12,7 @@ const units = [
 const assignments = {
     "IADECCO": ["Unit1", "Unit8", "Unit9", "Unit10", "Unit11", "Unit14", "Unit15"],
     "YAMATO": ["Unit2", "Unit3A", "Unit12A", "Unit12B", "Unit16", "Unit17", "Unit18", "Unit19"],
-    "INITI INDAH": ["Unit3B", "Unit5", "Unit6", "Unit7"]
+    "INTI INDAH": ["Unit3B", "Unit5", "Unit6", "Unit7"]
 };
 
 const STORAGE_KEY = "construction_log_data";
@@ -40,9 +40,41 @@ let isWideActive = false;
 let currentFacingMode = "environment";
 let isFlashOn = false;
 let yesterdayReport = null; // { date, data } — text-only snapshot
-let previewObjectUrls = [];
-let reportObjectUrls = [];
+let previewObjectUrls = []; // legacy — kept so older callers don't crash, no longer pushed to
+let reportObjectUrls = [];  // legacy — kept so older callers don't crash, no longer pushed to
 let overtimeData = {};  // { "IADECCO": "◯"|"×", "YAMATO": "◯"|"×", "INTI INDAH": "◯"|"×" }
+
+// Cache: photoId → { url, blob }. Each saved image gets exactly one Object URL
+// for its entire lifetime, so re-renders don't re-fetch from IndexedDB and
+// don't churn URLs (which would otherwise pile up or get prematurely revoked
+// by a concurrent render).
+const photoUrlCache = new Map();
+
+async function getPhotoUrl(photoId) {
+    const cached = photoUrlCache.get(photoId);
+    if (cached) return cached;
+    const blob = await getImageFromDB(photoId);
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    const entry = { url, blob };
+    photoUrlCache.set(photoId, entry);
+    return entry;
+}
+
+function evictPhotoUrl(photoId) {
+    const entry = photoUrlCache.get(photoId);
+    if (entry) {
+        try { URL.revokeObjectURL(entry.url); } catch (_) { }
+        photoUrlCache.delete(photoId);
+    }
+}
+
+function clearPhotoUrlCache() {
+    for (const entry of photoUrlCache.values()) {
+        try { URL.revokeObjectURL(entry.url); } catch (_) { }
+    }
+    photoUrlCache.clear();
+}
 
 function getDateKey(d) {
     d = d || new Date();
@@ -52,15 +84,10 @@ function getDateKey(d) {
     return `${y}-${m}-${day}`;
 }
 
-function revokePreviewUrls() {
-    previewObjectUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) { } });
-    previewObjectUrls = [];
-}
-
-function revokeReportUrls() {
-    reportObjectUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (_) { } });
-    reportObjectUrls = [];
-}
+// Retained as no-ops so any future caller doesn't crash. The new photoUrlCache
+// owns URL lifetimes per-photo, so per-render revoke is unnecessary.
+function revokePreviewUrls() { previewObjectUrls = []; }
+function revokeReportUrls()  { reportObjectUrls  = []; }
 
 function stripPhotos(data) {
     const copy = {};
@@ -78,6 +105,9 @@ function stripPhotos(data) {
 }
 
 async function clearAllStoredImages() {
+    // Cached Object URLs reference the same Blobs we're about to wipe — revoke
+    // them in lockstep so the cache doesn't hand out stale URLs afterwards.
+    clearPhotoUrlCache();
     try {
         const db = await openDB();
         const tx = db.transaction(IMG_STORE, "readwrite");
@@ -126,7 +156,7 @@ function getContractorColor(contractor) {
     switch (contractor) {
         case "IADECCO": return "var(--color-iadecco)";
         case "YAMATO": return "var(--color-yamato)";
-        case "INITI INDAH": return "var(--color-initi)";
+        case "INTI INDAH": return "var(--color-initi)";
         default: return "var(--color-unassigned)";
     }
 }
@@ -202,7 +232,6 @@ function openTaskOption(taskName, type) {
     let options = [];
     if (type === 'floor' || type === 'floor_lift_rebar') options = ["GF", "1F", "2F", "3F", "RF"];
     else if (type === 'floor_lift_gf') options = ["GF", "1F", "2F", "3F", "RF", "Lift"];
-    else if (type === 'floor_lift') options = ["1F", "2F", "3F", "RF", "Lift"];
     else if (type === 'excavation_targets') options = ["Pile cap", "Retaining wall", "Septic tank", "Ground tank", "Beam"];
     else if (type === 'rebar_struct_targets') options = ["Pile cap", "Retaining wall", "Beam", "Slab", "Column", "Stairs", "Carport slope area"];
     else if (type === 'rebar_fab_targets') options = ["Pile cap", "Beam", "Slab", "Retaining wall", "Column"];
@@ -567,11 +596,30 @@ function renderTaskList() {
         return;
     }
     currentTaskList.forEach((task, index) => {
+        // Build via DOM API so custom task text is treated as plain text
+        // (innerHTML interpolation would let "<script>" etc. execute).
         const div = document.createElement("div");
         div.className = "task-item-removable";
-        div.innerHTML = `<span>• ${task}</span> <button onclick="removeTask(${index})">×</button>`;
+        const span = document.createElement("span");
+        span.textContent = `• ${task}`;
+        const btn = document.createElement("button");
+        btn.textContent = "×";
+        btn.addEventListener("click", () => removeTask(index));
+        div.appendChild(span);
+        div.appendChild(document.createTextNode(" "));
+        div.appendChild(btn);
         display.appendChild(div);
     });
+}
+
+// Utility: HTML-escape a string so it can be safely embedded in innerHTML.
+function escapeHtml(s) {
+    return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
 
 function updateTaskCount() {
@@ -867,10 +915,27 @@ function selectPhotoFloor(floor) {
 function removePhoto(index) {
     const contractor = getContractor(selectedUnit);
     if (currentReport[contractor] && currentReport[contractor][selectedUnit]) {
-        currentReport[contractor][selectedUnit].photos.splice(index, 1);
+        const removed = currentReport[contractor][selectedUnit].photos.splice(index, 1)[0];
+        // Also drop the underlying Blob from IndexedDB so deleted photos don't
+        // accumulate until the next day rollover. Fire-and-forget — UI doesn't
+        // need to wait, and a failure here is non-fatal.
+        if (removed && removed.type === 'db_ref' && removed.id) {
+            evictPhotoUrl(removed.id); // revoke cached Object URL
+            deleteImageFromDB(removed.id).catch(e => console.warn('Image cleanup failed:', e));
+        }
         renderPhotoPreview();
         saveLocalData();
     }
+}
+
+async function deleteImageFromDB(id) {
+    const db = await openDB();
+    const tx = db.transaction(IMG_STORE, "readwrite");
+    tx.objectStore(IMG_STORE).delete(id);
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+    });
 }
 
 function saveAndClose() {
@@ -998,25 +1063,64 @@ async function loadLocalData() {
             yesterdayReport = yRec;
             overtimeData = result.overtime || {};
         }
+
+        // Migration: unify contractor key "INITI INDAH" → "INTI INDAH"
+        // Older builds stored the third contractor under the misspelled key
+        // "INITI INDAH". Rename it in place so saved tasks/photos keep working.
+        const migrated = migrateContractorKey(currentReport, "INITI INDAH", "INTI INDAH")
+            || (yesterdayReport && yesterdayReport.data && migrateContractorKey(yesterdayReport.data, "INITI INDAH", "INTI INDAH"));
+        if (migrated) await saveLocalData();
     } catch (e) { console.error("IndexedDB load failed:", e); }
+}
+
+function migrateContractorKey(report, oldKey, newKey) {
+    if (!report || !Object.prototype.hasOwnProperty.call(report, oldKey)) return false;
+    const oldEntry = report[oldKey] || {};
+    const newEntry = report[newKey] || {};
+    // Merge unit-level entries; if the same unit exists under both, prefer the new key.
+    report[newKey] = { ...oldEntry, ...newEntry };
+    delete report[oldKey];
+    return true;
 }
 
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") { if (selectedUnit) syncCurrentUnitData(); saveLocalData(); }
 });
-window.addEventListener("beforeunload", () => { if (selectedUnit) syncCurrentUnitData(); });
+window.addEventListener("beforeunload", () => {
+    if (selectedUnit) syncCurrentUnitData();
+    // Best-effort save before unload. IndexedDB transactions started here are
+    // not guaranteed to commit, but most browsers will let an already-started
+    // transaction finish. `visibilitychange` above is the primary save path.
+    saveLocalData();
+});
 
 function savePhoto(dataUrl) {
+    // Snapshot the target unit at capture time. If the user closes the input
+    // section before the async Blob save completes, `selectedUnit` would be
+    // null, which previously made `getContractor(null)` fall through to
+    // "Unassigned" and silently create a phantom contractor entry.
+    const targetUnit = selectedUnit;
+    if (!targetUnit) {
+        console.warn("savePhoto called with no selected unit — discarding capture.");
+        return;
+    }
+    const contractor = getContractor(targetUnit);
+    if (contractor === "Unassigned") {
+        console.warn("savePhoto: unit has no contractor mapping — discarding capture.", targetUnit);
+        return;
+    }
+
     fetch(dataUrl)
         .then(res => res.blob())
         .then(async blob => {
             const id = crypto.randomUUID();
             await saveImageToDB(id, blob);
-            const contractor = getContractor(selectedUnit);
             if (!currentReport[contractor]) currentReport[contractor] = {};
-            if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-            currentReport[contractor][selectedUnit].photos.push({ type: 'db_ref', id: id, timestamp: Date.now() });
-            renderPhotoPreview();
+            if (!currentReport[contractor][targetUnit]) currentReport[contractor][targetUnit] = { tasks: [], photos: [] };
+            currentReport[contractor][targetUnit].photos.push({ type: 'db_ref', id: id, timestamp: Date.now() });
+            // Only refresh the in-screen preview if the user is still on the
+            // same unit they captured for.
+            if (selectedUnit === targetUnit) renderPhotoPreview();
             saveLocalData();
         })
         .catch(err => console.error("Save failed:", err));
@@ -1025,7 +1129,6 @@ function savePhoto(dataUrl) {
 async function renderPhotoPreview() {
     const gallery = document.getElementById("preview-gallery");
     gallery.innerHTML = "";
-    revokePreviewUrls();
     const contractor = getContractor(selectedUnit);
     if (!currentReport[contractor] || !currentReport[contractor][selectedUnit]) return;
 
@@ -1035,11 +1138,8 @@ async function renderPhotoPreview() {
         let src = "";
         if (typeof item === 'string') src = item;
         else if (item.type === 'db_ref') {
-            const blob = await getImageFromDB(item.id);
-            if (blob) {
-                src = URL.createObjectURL(blob);
-                previewObjectUrls.push(src);
-            }
+            const entry = await getPhotoUrl(item.id);
+            if (entry) src = entry.url;
         }
         if (!src) continue;
 
@@ -1062,7 +1162,7 @@ async function renderPhotoPreview() {
 // REPORTS
 // =============================================================
 function priorityContractorSort(arr) {
-    const priorityOrder = ["IADECCO", "YAMATO", "INITI INDAH"];
+    const priorityOrder = ["IADECCO", "YAMATO", "INTI INDAH"];
     return arr.slice().sort((a, b) => {
         const idxA = priorityOrder.indexOf(a);
         const idxB = priorityOrder.indexOf(b);
@@ -1078,7 +1178,13 @@ async function renderAllReports() {
     const thisGen = ++_renderGeneration;
     const container = document.getElementById("reports-container");
     container.innerHTML = "";
-    revokeReportUrls();
+
+    // Object URLs are managed centrally by photoUrlCache (one URL per photo,
+    // alive until the photo is deleted or images are wiped). Render-level URL
+    // bucket management is therefore no longer needed — leaving these stubs
+    // here lets the existing abort/cleanup call sites compile cleanly.
+    const myUrls = [];
+    const cleanupOnAbort = () => {};
 
     const activeContractors = priorityContractorSort(Object.keys(currentReport));
 
@@ -1102,8 +1208,14 @@ async function renderAllReports() {
         container.appendChild(bar);
 
         for (const contractor of activeContractors) {
-            const { text, photoData } = await generateContractorReportData(contractor);
-            if (thisGen !== _renderGeneration) return; // newer render started, abort this one
+            const { text, photoData, unitBreakdown } = await generateContractorReportData(contractor, myUrls);
+            if (thisGen !== _renderGeneration) { cleanupOnAbort(); return; } // newer render started, abort this one
+
+            // Pre-compute how many share groups this contractor needs. If the OS
+            // rejects all photos at once (typical for IADECCO/YAMATO which have
+            // many units), we split into multiple Share-to-WA buttons.
+            const shareGroups = chunkUnitsForShare(contractor, unitBreakdown);
+
             const card = document.createElement("div");
             card.className = "report-card";
             card.style.borderLeftColor = getContractorColor(contractor);
@@ -1118,14 +1230,28 @@ async function renderAllReports() {
             }
             imagesHtml += `</div>`;
 
+            // Build one Share-to-WA button per group. Single-group case keeps
+            // the original label "💬 Share to WA" so nothing changes for
+            // contractors whose payload already fits (e.g. INTI INDAH).
+            let shareButtonsHtml = '';
+            if (shareGroups.length <= 1) {
+                shareButtonsHtml = `<button class="copy-btn" data-share-idx="0" style="background:#25D366; color:white;">💬 Share to WA</button>`;
+            } else {
+                for (let g = 0; g < shareGroups.length; g++) {
+                    shareButtonsHtml += `<button class="copy-btn" data-share-idx="${g}" style="background:#25D366; color:white;">💬 Share to WA (${g + 1}/${shareGroups.length})</button>`;
+                }
+            }
+
             // Build card HTML without embedding text into onclick attributes
-            // (text with newlines/quotes/backticks was breaking HTML attribute parsing)
+            // (text with newlines/quotes/backticks was breaking HTML attribute parsing).
+            // Report text is escaped because custom task names are user-controlled
+            // — without escaping, "<script>" in a task would execute on render.
             card.innerHTML = `
-                <div class="report-header"><h3>${contractor}</h3></div>
-                <div class="report-content">${text}</div>
+                <div class="report-header"><h3>${escapeHtml(contractor)}</h3></div>
+                <div class="report-content">${escapeHtml(text)}</div>
                 <div class="action-row" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
                     <button class="copy-btn" data-action="copy">📋 Copy Text</button>
-                    <button class="copy-btn" data-action="share-wa" style="background:#25D366; color:white;">💬 Share to WA</button>
+                    ${shareButtonsHtml}
                     <button class="copy-btn" data-action="save-photos" style="background:#4f46e5; color:white;">📥 Save Photos</button>
                 </div>
                 <div style="margin-top:10px">${imagesHtml}</div>
@@ -1133,12 +1259,23 @@ async function renderAllReports() {
 
             // Attach event listeners safely via DOM (avoids inline onclick text-escaping bugs)
             const copyBtn = card.querySelector('[data-action="copy"]');
-            const waBtn = card.querySelector('[data-action="share-wa"]');
             const saveBtn = card.querySelector('[data-action="save-photos"]');
 
             copyBtn.addEventListener('click', function () { copyText(this, text); });
-            waBtn.addEventListener('click', function () { shareToWhatsApp(text, photoData); });
             saveBtn.addEventListener('click', function () { saveAllPhotos(photoData); });
+
+            // Wire up Share-to-WA buttons (one per group)
+            card.querySelectorAll('[data-share-idx]').forEach(btn => {
+                const idx = parseInt(btn.getAttribute('data-share-idx'), 10);
+                const group = shareGroups[idx];
+                btn.addEventListener('click', function () {
+                    if (group) {
+                        shareToWhatsApp(group.text, group.photoData);
+                    } else {
+                        shareToWhatsApp(text, []);
+                    }
+                });
+            });
 
             container.appendChild(card);
         }
@@ -1146,6 +1283,8 @@ async function renderAllReports() {
 
     renderOvertimeSection(container);
     renderYesterdaySection(container);
+    // No per-render URL cleanup needed: photoUrlCache owns those URLs and
+    // releases them on photo delete / day rollover.
 }
 
 // =============================================================
@@ -1288,8 +1427,8 @@ function renderYesterdaySection(container) {
         card.style.borderLeftColor = getContractorColor(contractor);
         card.style.opacity = "0.85";
         card.innerHTML = `
-            <div class="report-header"><h3>${contractor}</h3></div>
-            <div class="report-content">${fullText}</div>
+            <div class="report-header"><h3>${escapeHtml(contractor)}</h3></div>
+            <div class="report-content">${escapeHtml(fullText)}</div>
             <div class="action-row" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
                 <button class="copy-btn" data-action="copy">📋 Copy Text</button>
             </div>
@@ -1301,14 +1440,20 @@ function renderYesterdaySection(container) {
     container.appendChild(section);
 }
 
-async function generateContractorReportData(contractor) {
+async function generateContractorReportData(contractor, urlSink) {
+    // urlSink is kept for backward compatibility with callers from older builds.
+    // The new photoUrlCache owns Object URL lifetimes, so we no longer push
+    // per-render URLs into a sink that gets revoked on the next render.
+    void urlSink;
     const data = currentReport[contractor];
     const units = Object.keys(data).sort(naturalSort);
     let allPhotoData = [];
     let body = "";
+    const unitBreakdown = []; // [{ unit, taskText, photos: [{url, unit, blob}, ...] }]
 
     for (const unit of units) {
         const unitData = data[unit];
+        const unitPhotos = [];
         for (const photo of unitData.photos) {
             let url = "";
             let fileBlob = null;
@@ -1319,24 +1464,121 @@ async function generateContractorReportData(contractor) {
                 } catch(e) {}
             }
             else if (photo.type === 'db_ref') {
-                const blob = await getImageFromDB(photo.id);
-                if (blob) {
-                    url = URL.createObjectURL(blob);
-                    reportObjectUrls.push(url);
-                    fileBlob = blob;
+                const entry = await getPhotoUrl(photo.id);
+                if (entry) {
+                    url = entry.url;
+                    fileBlob = entry.blob;
                 }
             }
-            if (url) allPhotoData.push({ url, unit, blob: fileBlob });
+            if (url) {
+                const item = { url, unit, blob: fileBlob };
+                allPhotoData.push(item);
+                unitPhotos.push(item);
+            }
         }
+        let taskText = "";
         if (unitData.tasks.length > 0) {
-            body += `${unit}:\n`;
-            unitData.tasks.forEach(t => { body += `-${t.text}\n`; });
-            body += `\n`;
+            taskText = `${unit}:\n`;
+            unitData.tasks.forEach(t => { taskText += `-${t.text}\n`; });
+            body += taskText + `\n`;
         }
+        unitBreakdown.push({ unit, taskText, photos: unitPhotos });
     }
 
     const fullText = `${contractor}\n${body}`.trim();
-    return { text: fullText, photoData: allPhotoData };
+    return { text: fullText, photoData: allPhotoData, unitBreakdown };
+}
+
+// =============================================================
+// SHARE CHUNKING
+// =============================================================
+// Some OSes (iOS/Android) reject `navigator.share({files})` when the total
+// payload (file count or total bytes) is too large. When that happens, the
+// previous implementation silently fell back to a text-only share, making it
+// look like the photos "disappeared" from the WhatsApp share sheet.
+//
+// chunkUnitsForShare() splits a contractor's report into multiple groups,
+// each containing a subset of consecutive units whose combined photo files
+// pass `navigator.canShare({files})`. Each group's text contains only the
+// task lines for the units in that group, so the recipient can correlate
+// text and photos per group.
+function chunkUnitsForShare(contractor, unitBreakdown) {
+    const dateStr = getDateKey().replace(/-/g, '');
+
+    // Build File objects per unit up front
+    const unitsWithFiles = unitBreakdown.map(ub => {
+        const files = ub.photos
+            .filter(p => p.blob)
+            .map((p, i) => new File([p.blob], `${dateStr}_${p.unit}_${i + 1}.jpg`, { type: 'image/jpeg' }));
+        return { unit: ub.unit, taskText: ub.taskText, photos: ub.photos.filter(p => p.blob), files };
+    });
+
+    const canShareSet = (files) => {
+        if (!files || files.length === 0) return true;
+        if (!navigator.canShare) return true;
+        try { return navigator.canShare({ files }); } catch { return false; }
+    };
+
+    const buildGroup = (units) => {
+        const lines = [contractor];
+        for (const u of units) {
+            if (u.taskText) lines.push(u.taskText.trimEnd());
+        }
+        return {
+            text: lines.join('\n').trim(),
+            files: units.flatMap(u => u.files),
+            photoData: units.flatMap(u => u.photos)
+        };
+    };
+
+    // Fast path: everything fits in one share
+    const allFiles = unitsWithFiles.flatMap(u => u.files);
+    if (canShareSet(allFiles)) {
+        return [buildGroup(unitsWithFiles)];
+    }
+
+    // Greedy: add units one-by-one until canShare rejects, then start a new group
+    const groups = [];
+    let currentUnits = [];
+    let currentFiles = [];
+
+    const flushCurrent = () => {
+        if (currentUnits.length > 0) groups.push(buildGroup(currentUnits));
+        currentUnits = [];
+        currentFiles = [];
+    };
+
+    for (const ub of unitsWithFiles) {
+        if (ub.files.length === 0) {
+            // Unit with no photos — keep its task text bundled with the current group
+            currentUnits.push(ub);
+            continue;
+        }
+        const tentative = currentFiles.concat(ub.files);
+        if (canShareSet(tentative)) {
+            currentUnits.push(ub);
+            currentFiles = tentative;
+        } else {
+            flushCurrent();
+            if (canShareSet(ub.files)) {
+                currentUnits = [ub];
+                currentFiles = ub.files.slice();
+            } else {
+                // Even this single unit's photos exceed the limit. Push as its
+                // own group anyway — `shareToWhatsApp` will degrade to
+                // text-only for this group if the OS still refuses.
+                groups.push(buildGroup([ub]));
+            }
+        }
+    }
+    flushCurrent();
+
+    if (groups.length === 0) {
+        // No units at all — produce one text-only group so the UI still
+        // renders a Share-to-WA button.
+        groups.push({ text: contractor, files: [], photoData: [] });
+    }
+    return groups;
 }
 
 // Share to WhatsApp
@@ -1363,12 +1605,17 @@ async function shareToWhatsApp(text, photoData) {
         }
 
         if (allFiles.length > 0) {
-            try {
-                await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
-                shared = true;
-            } catch (err) {
-                if (err.name === 'AbortError') return; // User cancelled
-                console.warn('Share with files failed, trying text only:', err);
+            // Check if the OS supports sharing these files (prevents wasting the user gesture on a doomed request)
+            if (navigator.canShare && navigator.canShare({ files: allFiles })) {
+                try {
+                    await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
+                    shared = true;
+                } catch (err) {
+                    if (err.name === 'AbortError') return; // User cancelled
+                    console.warn('Share with files failed:', err);
+                }
+            } else {
+                console.warn('navigator.canShare returned false. Skipping file share to preserve gesture.');
             }
         }
     }
