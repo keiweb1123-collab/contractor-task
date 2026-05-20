@@ -1538,18 +1538,17 @@ async function generateContractorReportData(contractor, urlSink) {
 // =============================================================
 // SHARE CHUNKING
 // =============================================================
-// Background: iOS/Android Share Sheet + WhatsApp empirically fails when too
-// many image files are attached at once. `navigator.canShare({files})` lies
-// here — it returns true at the OS layer, but the actual navigator.share()
-// either throws or hands WhatsApp a payload it silently rejects (the
-// "Open WhatsApp?" deep-link prompt that IADECCO/YAMATO users saw was the
-// downstream symptom of share() throwing and the code falling through to
-// the whatsapp:// deep-link fallback).
-//
-// So we no longer trust canShare. We hard-cap each group to
-// MAX_FILES_PER_SHARE so navigator.share() is always called with a payload
-// that WhatsApp is known to accept.
+// Background: navigator.canShare({files}) returns true at the OS layer even
+// when the actual share() will reject, and on Chrome Android PWA the
+// failure mode for "too many files OR too many total bytes" is a
+// NotAllowedError ("Permission denied"). User confirmed sharing 1 photo
+// succeeds; sharing 12 photos in one group fails. The most common cause is
+// total payload size, so we now chunk by BOTH:
+//   - file count (kept at 20 — user explicitly asked not to lower)
+//   - total bytes (4 MB per group — leaves headroom under the common
+//     ~10 MB practical limit observed for Chrome Android Web Share API)
 const MAX_FILES_PER_SHARE = 20;
+const MAX_BYTES_PER_SHARE = 4 * 1024 * 1024;
 
 function chunkUnitsForShare(contractor, unitBreakdown) {
     const dateStr = getDateKey().replace(/-/g, '');
@@ -1567,10 +1566,16 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         if (!navigator.canShare) return true;
         try { return navigator.canShare({ files }); } catch { return false; }
     };
-    // A group is acceptable only if BOTH the OS accepts it AND we're under
-    // the hard file-count cap. canShare alone is not sufficient — see the
-    // comment block above.
-    const fitsLimit = (files) => files.length <= MAX_FILES_PER_SHARE && canShareSet(files);
+    const totalBytes = (files) => files.reduce((s, f) => s + (f.size || 0), 0);
+    // A group is acceptable only if it passes ALL three checks:
+    //   1. OS-level canShare returns true
+    //   2. file count ≤ MAX_FILES_PER_SHARE
+    //   3. total bytes ≤ MAX_BYTES_PER_SHARE
+    // canShare alone is not sufficient — see the comment block above.
+    const fitsLimit = (files) =>
+        files.length <= MAX_FILES_PER_SHARE
+        && totalBytes(files) <= MAX_BYTES_PER_SHARE
+        && canShareSet(files);
 
     const buildGroup = (units) => {
         const lines = [contractor];
@@ -1677,6 +1682,8 @@ function shareToWhatsApp(text, photoData) {
         ? { title: 'Construction Report', text, files }
         : { title: 'Construction Report', text };
 
+    const totalBytes = files.reduce((s, f) => s + (f.size || 0), 0);
+
     navigator.share(payload).then(
         () => {
             recordShareDiag(null); // clear previous diagnostic on success
@@ -1688,6 +1695,7 @@ function shareToWhatsApp(text, photoData) {
                 name: err && err.name,
                 message: err && err.message,
                 fileCount: files.length,
+                totalBytes: totalBytes,
                 textLength: (text || '').length,
                 ts: Date.now()
             });
@@ -1752,7 +1760,11 @@ function renderShareDiag() {
         const when = new Date(info.ts).toLocaleTimeString();
         let line1 = `[${when}] share(${info.stage}) failed: ${info.name || 'unknown'}`;
         if (info.message) line1 += ` — ${info.message}`;
-        if (info.fileCount != null) line1 += ` (files=${info.fileCount}, text=${info.textLength})`;
+        if (info.fileCount != null) {
+            line1 += ` (files=${info.fileCount}`;
+            if (info.totalBytes != null) line1 += `, bytes=${(info.totalBytes / 1024 / 1024).toFixed(2)}MB`;
+            line1 += `, text=${info.textLength})`;
+        }
 
         let line2 = '';
         if (info.env) {
