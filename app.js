@@ -58,9 +58,65 @@ async function getPhotoUrl(photoId) {
     const blob = await getImageFromDB(photoId);
     if (!blob) return null;
     const url = URL.createObjectURL(blob);
-    const entry = { url, blob };
+    // `shareBlob` is populated lazily in the background — see below. It is a
+    // resized variant of `blob` intended for navigator.share, where the
+    // payload size matters. If still null when the user shares, callers fall
+    // back to the original blob.
+    const entry = { url, blob, shareBlob: null };
     photoUrlCache.set(photoId, entry);
+
+    // Kick off a background resize so navigator.share() can use a smaller
+    // payload later without async work in the click handler. We do NOT await
+    // this — render proceeds with the original blob immediately.
+    resizeBlobForShare(blob, 1024).then(small => {
+        entry.shareBlob = small;
+    }).catch(e => {
+        console.warn('share resize failed; will use original blob:', e);
+    });
+
     return entry;
+}
+
+// Resize a JPEG blob to maxWidth (preserving aspect ratio) while keeping
+// JPEG quality at 0.75. Visual quality on a phone screen is preserved; the
+// byte size drops because there are fewer pixels to encode. Returns the
+// original blob if it's already smaller than maxWidth, so we never upscale.
+function resizeBlobForShare(blob, maxWidth) {
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+            try {
+                if (img.naturalWidth <= maxWidth) {
+                    URL.revokeObjectURL(url);
+                    resolve(blob); // already small enough — no re-encode needed
+                    return;
+                }
+                const ratio = maxWidth / img.naturalWidth;
+                const w = Math.round(img.naturalWidth * ratio);
+                const h = Math.round(img.naturalHeight * ratio);
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, w, h);
+                URL.revokeObjectURL(url);
+                canvas.toBlob(
+                    b => b ? resolve(b) : reject(new Error('toBlob returned null')),
+                    'image/jpeg',
+                    0.75
+                );
+            } catch (e) {
+                URL.revokeObjectURL(url);
+                reject(e);
+            }
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('image load failed'));
+        };
+        img.src = url;
+    });
 }
 
 function evictPhotoUrl(photoId) {
@@ -829,8 +885,11 @@ function capturePhoto() {
     const canvas = document.getElementById("camera-canvas");
     if (!cameraStream) return;
 
-    // Reduce maxWidth to avoid OS-level payload limits when sharing many photos
-    const maxWidth = 1280;
+    // Cap captures at 1024 px wide. On a phone screen (typically 3–4× DPR
+    // for the relevant viewport), 1024 px is indistinguishable from 1280 px,
+    // but the file is ~40 % smaller, which is what keeps many-photo shares
+    // under the practical Web Share API payload limit on Android Chrome PWA.
+    const maxWidth = 1024;
     let w = video.videoWidth;
     let h = video.videoHeight;
 
@@ -1509,15 +1568,25 @@ async function generateContractorReportData(contractor, urlSink) {
                     fileBlob = await (await fetch(url)).blob();
                 } catch(e) {}
             }
-            else if (photo.type === 'db_ref') {
-                const entry = await getPhotoUrl(photo.id);
-                if (entry) {
-                    url = entry.url;
-                    fileBlob = entry.blob;
+            let cacheEntry = null;
+            if (photo.type === 'db_ref') {
+                cacheEntry = await getPhotoUrl(photo.id);
+                if (cacheEntry) {
+                    url = cacheEntry.url;
+                    fileBlob = cacheEntry.blob;
                 }
             }
             if (url) {
+                // Bind shareBlob via a live getter so callers (shareToWhatsApp)
+                // see the resized variant as soon as the background resize
+                // completes, without us having to re-render reports.
                 const item = { url, unit, blob: fileBlob };
+                if (cacheEntry) {
+                    Object.defineProperty(item, 'shareBlob', {
+                        get: () => cacheEntry.shareBlob,
+                        enumerable: true,
+                    });
+                }
                 allPhotoData.push(item);
                 unitPhotos.push(item);
             }
@@ -1553,11 +1622,16 @@ const MAX_BYTES_PER_SHARE = 4 * 1024 * 1024;
 function chunkUnitsForShare(contractor, unitBreakdown) {
     const dateStr = getDateKey().replace(/-/g, '');
 
-    // Build File objects per unit up front
+    // Build File objects per unit up front. Prefer the smaller `shareBlob`
+    // (when ready) so chunking decisions reflect the bytes that will actually
+    // be sent to navigator.share, not the larger original blob.
     const unitsWithFiles = unitBreakdown.map(ub => {
         const files = ub.photos
             .filter(p => p.blob)
-            .map((p, i) => new File([p.blob], `${dateStr}_${p.unit}_${i + 1}.jpg`, { type: 'image/jpeg' }));
+            .map((p, i) => {
+                const src = p.shareBlob || p.blob;
+                return new File([src], `${dateStr}_${p.unit}_${i + 1}.jpg`, { type: 'image/jpeg' });
+            });
         return { unit: ub.unit, taskText: ub.taskText, photos: ub.photos.filter(p => p.blob), files };
     });
 
@@ -1665,14 +1739,17 @@ function shareToWhatsApp(text, photoData) {
     }
 
     // Build files. Caller (renderAllReports) has already capped photoData to
-    // MAX_FILES_PER_SHARE via chunkUnitsForShare.
+    // MAX_FILES_PER_SHARE via chunkUnitsForShare. We prefer `shareBlob` (the
+    // smaller, resized variant produced by getPhotoUrl in the background)
+    // when it's ready, falling back to the original `blob` if not.
     const files = [];
     if (photoData && photoData.length > 0) {
         const dateStr = getDateKey().replace(/-/g, '');
         for (let i = 0; i < photoData.length; i++) {
-            if (photoData[i].blob) {
+            const sourceBlob = photoData[i].shareBlob || photoData[i].blob;
+            if (sourceBlob) {
                 const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-                files.push(new File([photoData[i].blob], filename, { type: 'image/jpeg' }));
+                files.push(new File([sourceBlob], filename, { type: 'image/jpeg' }));
             }
         }
     }
