@@ -1720,7 +1720,11 @@ function getEnvSnapshot() {
     } catch (_) {}
     const hasShare = !!navigator.share;
     const hasCanShare = !!(navigator.canShare);
-    return { ua, mode, hasShare, hasCanShare };
+    // Brave exposes navigator.brave with an isBrave() method. Detecting it
+    // synchronously is enough — the mere presence of navigator.brave means
+    // the user is on Brave, which restricts Web Share for files via Shields.
+    const isBrave = !!(navigator.brave && typeof navigator.brave.isBrave === 'function');
+    return { ua, mode, hasShare, hasCanShare, isBrave };
 }
 
 function recordShareDiag(info) {
@@ -1742,7 +1746,7 @@ function renderShareDiag() {
     if (!el) return;
     let raw;
     try { raw = localStorage.getItem(SHARE_DIAG_KEY); } catch (_) { raw = null; }
-    if (!raw) { el.textContent = ''; return; }
+    if (!raw) { el.innerHTML = ''; return; }
     try {
         const info = JSON.parse(raw);
         const when = new Date(info.ts).toLocaleTimeString();
@@ -1753,24 +1757,57 @@ function renderShareDiag() {
         let line2 = '';
         if (info.env) {
             line2 = `env: ${info.env.mode}, share=${info.env.hasShare}, canShare=${info.env.hasCanShare}`;
+            if (info.env.isBrave) line2 += ', brave=true';
             if (info.env.ua) line2 += `\nUA: ${info.env.ua}`;
         }
 
-        // Show line 1 prominently in red; environment in a slightly smaller
-        // gray block below.
+        let braveNote = '';
+        if (info.env && info.env.isBrave) {
+            braveNote = 'Brave detected: Shields はファイル共有をブロックします。アドレスバーのライオン🦁 → Shields を「Down」にしてリロードしてください。';
+        }
+
+        // Rebuild the diagnostic block from scratch.
         el.innerHTML = '';
+
         const top = document.createElement('div');
         top.textContent = line1;
+        el.appendChild(top);
+
+        if (braveNote) {
+            const note = document.createElement('div');
+            note.style.color = '#b45309';      // amber
+            note.style.background = '#fef3c7';
+            note.style.padding = '6px 8px';
+            note.style.borderRadius = '6px';
+            note.style.marginTop = '6px';
+            note.style.fontSize = '0.72rem';
+            note.textContent = braveNote;
+            el.appendChild(note);
+        }
+
         const bottom = document.createElement('div');
         bottom.style.color = '#6b7280';
         bottom.style.fontSize = '0.65rem';
         bottom.style.marginTop = '4px';
         bottom.style.whiteSpace = 'pre-wrap';
         bottom.textContent = line2;
-        el.appendChild(top);
         el.appendChild(bottom);
+
+        // Copy-to-clipboard button so the user doesn't have to retype the
+        // long diagnostic when reporting it back.
+        const actionRow = document.createElement('div');
+        actionRow.style.marginTop = '6px';
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = '📋 診断をコピー';
+        copyBtn.style.cssText = 'background:#f3f4f6; color:#374151; border:1px solid #d1d5db; padding:6px 12px; border-radius:6px; font-size:0.7rem; cursor:pointer;';
+        copyBtn.addEventListener('click', function () {
+            const full = `${line1}\n${braveNote ? braveNote + '\n' : ''}${line2}`;
+            copyText(this, full);
+        });
+        actionRow.appendChild(copyBtn);
+        el.appendChild(actionRow);
     } catch (_) {
-        el.textContent = '';
+        el.innerHTML = '';
     }
 }
 
