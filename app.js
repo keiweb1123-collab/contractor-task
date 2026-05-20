@@ -53,6 +53,8 @@ const photoUrlCache = new Map();
 async function getPhotoUrl(photoId) {
     const cached = photoUrlCache.get(photoId);
     if (cached) return cached;
+    // getImageFromDB now returns a detached, memory-only Blob (see comment
+    // there). No further detach work needed here.
     const blob = await getImageFromDB(photoId);
     if (!blob) return null;
     const url = URL.createObjectURL(blob);
@@ -993,7 +995,36 @@ async function getImageFromDB(id) {
     const db = await openDB();
     const tx = db.transaction(IMG_STORE, "readonly");
     const req = tx.objectStore(IMG_STORE).get(id);
-    return new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+
+    // ⚠️ iOS Safari WebKit bug (long-standing): Blobs read from IndexedDB are
+    // backed by the transaction. Once the transaction auto-commits — which
+    // happens as soon as we hand control back to the event loop after the
+    // get() resolves — the Blob can be "neutered". A neutered Blob looks
+    // valid but reads return empty data and navigator.share({files: [blob]})
+    // throws a non-AbortError. INTI INDAH (few photos) worked because the
+    // share() ran before any Blob neutered; IADECCO/YAMATO (many photos) hit
+    // the window where at least one Blob in the batch had gone bad.
+    //
+    // Fix: read the Blob's bytes via arrayBuffer() inside the success handler
+    // (i.e. before the transaction commits), then wrap the bytes in a fresh
+    // memory-only Blob that no longer references the database. The returned
+    // Blob is now safe to cache and share later.
+    const result = await new Promise((resolve, reject) => {
+        req.onsuccess = () => {
+            const idbBlob = req.result;
+            if (!idbBlob) { resolve(null); return; }
+            idbBlob.arrayBuffer().then(
+                ab => resolve(new Blob([ab], { type: idbBlob.type || 'image/jpeg' })),
+                e => { console.warn('IDB Blob detach failed; using raw blob:', e); resolve(idbBlob); }
+            );
+        };
+        req.onerror = () => reject(req.error);
+    });
+
+    // Close the connection. The Blob we return no longer needs it because
+    // it's been copied into memory above.
+    try { db.close(); } catch (_) { }
+    return result;
 }
 
 async function saveLocalData() {
