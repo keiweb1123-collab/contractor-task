@@ -1608,15 +1608,12 @@ async function generateContractorReportData(contractor, urlSink) {
 // SHARE CHUNKING
 // =============================================================
 // Background: navigator.canShare({files}) returns true at the OS layer even
-// when the actual share() will reject, and on Chrome Android PWA the
-// failure mode for "too many files OR too many total bytes" is a
-// NotAllowedError ("Permission denied"). User confirmed sharing 1 photo
-// succeeds; sharing 12 photos in one group fails. The most common cause is
-// total payload size, so we now chunk by BOTH:
-//   - file count (kept at 20 — user explicitly asked not to lower)
-//   - total bytes (4 MB per group — leaves headroom under the common
-//     ~10 MB practical limit observed for Chrome Android Web Share API)
-const MAX_FILES_PER_SHARE = 20;
+// when the actual share() will reject. On Chrome Android PWA the failure
+// mode is NotAllowedError ("Permission denied"), and user testing
+// pinpointed the threshold to file COUNT: 10 photos succeed, 11+ fail
+// — total bytes are not the dominant constraint. We chunk by both anyway
+// so a future device with stricter byte limits still degrades gracefully.
+const MAX_FILES_PER_SHARE = 10;
 const MAX_BYTES_PER_SHARE = 4 * 1024 * 1024;
 
 function chunkUnitsForShare(contractor, unitBreakdown) {
