@@ -1492,16 +1492,19 @@ async function generateContractorReportData(contractor, urlSink) {
 // =============================================================
 // SHARE CHUNKING
 // =============================================================
-// Some OSes (iOS/Android) reject `navigator.share({files})` when the total
-// payload (file count or total bytes) is too large. When that happens, the
-// previous implementation silently fell back to a text-only share, making it
-// look like the photos "disappeared" from the WhatsApp share sheet.
+// Background: iOS/Android Share Sheet + WhatsApp empirically fails when too
+// many image files are attached at once. `navigator.canShare({files})` lies
+// here — it returns true at the OS layer, but the actual navigator.share()
+// either throws or hands WhatsApp a payload it silently rejects (the
+// "Open WhatsApp?" deep-link prompt that IADECCO/YAMATO users saw was the
+// downstream symptom of share() throwing and the code falling through to
+// the whatsapp:// deep-link fallback).
 //
-// chunkUnitsForShare() splits a contractor's report into multiple groups,
-// each containing a subset of consecutive units whose combined photo files
-// pass `navigator.canShare({files})`. Each group's text contains only the
-// task lines for the units in that group, so the recipient can correlate
-// text and photos per group.
+// So we no longer trust canShare. We hard-cap each group to
+// MAX_FILES_PER_SHARE so navigator.share() is always called with a payload
+// that WhatsApp is known to accept.
+const MAX_FILES_PER_SHARE = 20;
+
 function chunkUnitsForShare(contractor, unitBreakdown) {
     const dateStr = getDateKey().replace(/-/g, '');
 
@@ -1518,6 +1521,10 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         if (!navigator.canShare) return true;
         try { return navigator.canShare({ files }); } catch { return false; }
     };
+    // A group is acceptable only if BOTH the OS accepts it AND we're under
+    // the hard file-count cap. canShare alone is not sufficient — see the
+    // comment block above.
+    const fitsLimit = (files) => files.length <= MAX_FILES_PER_SHARE && canShareSet(files);
 
     const buildGroup = (units) => {
         const lines = [contractor];
@@ -1531,13 +1538,6 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         };
     };
 
-    // Fast path: everything fits in one share
-    const allFiles = unitsWithFiles.flatMap(u => u.files);
-    if (canShareSet(allFiles)) {
-        return [buildGroup(unitsWithFiles)];
-    }
-
-    // Greedy: add units one-by-one until canShare rejects, then start a new group
     const groups = [];
     let currentUnits = [];
     let currentFiles = [];
@@ -1555,19 +1555,28 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
             continue;
         }
         const tentative = currentFiles.concat(ub.files);
-        if (canShareSet(tentative)) {
+        if (fitsLimit(tentative)) {
             currentUnits.push(ub);
             currentFiles = tentative;
         } else {
             flushCurrent();
-            if (canShareSet(ub.files)) {
+            if (fitsLimit(ub.files)) {
                 currentUnits = [ub];
                 currentFiles = ub.files.slice();
             } else {
-                // Even this single unit's photos exceed the limit. Push as its
-                // own group anyway — `shareToWhatsApp` will degrade to
-                // text-only for this group if the OS still refuses.
-                groups.push(buildGroup([ub]));
+                // A single unit's photos already exceed the cap. Split that
+                // unit's photos into sub-chunks of MAX_FILES_PER_SHARE each.
+                // The unit's task text rides on the first sub-chunk only so
+                // the recipient doesn't see the same task list repeated.
+                for (let start = 0; start < ub.files.length; start += MAX_FILES_PER_SHARE) {
+                    const end = Math.min(start + MAX_FILES_PER_SHARE, ub.files.length);
+                    groups.push(buildGroup([{
+                        unit: ub.unit,
+                        taskText: start === 0 ? ub.taskText : "",
+                        photos: ub.photos.slice(start, end),
+                        files: ub.files.slice(start, end)
+                    }]));
+                }
             }
         }
     }
@@ -1582,8 +1591,16 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
 }
 
 // Share to WhatsApp
-// - With photos: navigator.share (share sheet → pick WhatsApp → text+images)
-// - Without photos: whatsapp:// deep link (opens WhatsApp directly → text only)
+// - Web Share API available: navigator.share (share sheet → pick WhatsApp)
+// - Otherwise: whatsapp:// deep link
+//
+// CRITICAL: navigator.share is called AT MOST ONCE per click. The previous
+// implementation tried with files first, then text on failure, but that
+// second call had no user gesture left on iOS — it threw NotAllowedError
+// which the code mistook for a generic failure and fell through to the
+// whatsapp:// deep link, producing the "Open WhatsApp?" popup IADECCO/YAMATO
+// users were reporting. We now decide the payload up front and only call
+// share() once.
 async function shareToWhatsApp(text, photoData) {
     if (!navigator.share) {
         // Desktop or unsupported browser fallback
@@ -1591,44 +1608,42 @@ async function shareToWhatsApp(text, photoData) {
         return;
     }
 
-    let shared = false;
-
-    // 1. Try to share with photos if they exist
+    // Build file list once. The caller (renderAllReports) has already capped
+    // photoData to MAX_FILES_PER_SHARE via chunkUnitsForShare, so the file
+    // count here is safe to pass to navigator.share.
+    const files = [];
     if (photoData && photoData.length > 0) {
-        const allFiles = [];
         const dateStr = getDateKey().replace(/-/g, '');
         for (let i = 0; i < photoData.length; i++) {
             if (photoData[i].blob) {
                 const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
-                allFiles.push(new File([photoData[i].blob], filename, { type: 'image/jpeg' }));
-            }
-        }
-
-        if (allFiles.length > 0) {
-            // Check if the OS supports sharing these files (prevents wasting the user gesture on a doomed request)
-            if (navigator.canShare && navigator.canShare({ files: allFiles })) {
-                try {
-                    await navigator.share({ title: 'Construction Report', text: text, files: allFiles });
-                    shared = true;
-                } catch (err) {
-                    if (err.name === 'AbortError') return; // User cancelled
-                    console.warn('Share with files failed:', err);
-                }
-            } else {
-                console.warn('navigator.canShare returned false. Skipping file share to preserve gesture.');
+                files.push(new File([photoData[i].blob], filename, { type: 'image/jpeg' }));
             }
         }
     }
 
-    // 2. If no photos, or sharing photos failed, try text-only via Share Sheet
-    if (!shared) {
-        try {
-            await navigator.share({ title: 'Construction Report', text: text });
-        } catch (err) {
-            if (err.name === 'AbortError') return; // User cancelled
-            console.warn('Share text-only failed, falling back to deep link:', err);
-            // 3. Final fallback: deep link
+    // Decide payload before consuming the gesture.
+    let payload;
+    if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
+        payload = { title: 'Construction Report', text, files };
+    } else {
+        payload = { title: 'Construction Report', text };
+    }
+
+    try {
+        await navigator.share(payload);
+    } catch (err) {
+        if (err.name === 'AbortError') return; // user cancelled — fine
+        console.warn('navigator.share failed:', err);
+        if (!payload.files) {
+            // Text-only share failed for some non-cancel reason — deep link is
+            // still useful here since we have no photos to lose anyway.
             openWhatsAppWithText(text);
+        } else {
+            // File share failed. Don't silently degrade to text-only or a deep
+            // link — that's exactly the misleading behavior we are trying to
+            // fix. Tell the user so they know to retry / reduce photos.
+            alert("写真付きで共有できませんでした。\n枚数が多すぎる可能性があります。\n別の方法(別アプリでの共有や写真の個別保存)をお試しください。");
         }
     }
 }
