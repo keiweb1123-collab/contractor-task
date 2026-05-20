@@ -1636,16 +1636,23 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
     return groups;
 }
 
-// Share to WhatsApp
-// - With photos: navigator.share({files}) → OS share sheet → pick WhatsApp
-// - If file share fails: navigator.share({text}) silently → share sheet → text only
-// - If text share also fails: whatsapp:// deep link as last resort
+// Share to WhatsApp.
 //
-// We chain fallbacks SILENTLY (no confirm dialogs) so the user gets the
-// smoothest path that actually works on their device. The user explicitly
-// asked for this — the previous v56-v58 versions interrupted the flow with
-// an extra confirm + popup, which broke their muscle memory.
-async function shareToWhatsApp(text, photoData) {
+// CRITICAL: navigator.share() consumes user activation, so the Web Share API
+// can only be invoked ONCE per click. v59/v60 tried files-first then text on
+// failure, but the second call always threw NotAllowedError ("must be handling
+// a user gesture") on Android — and that NotAllowedError overwrote the real
+// reason for the first failure in our diagnostic display. v61 calls
+// navigator.share() exactly once, decides the payload up front from canShare,
+// and falls back to the whatsapp:// deep link (which doesn't need a gesture)
+// if that one call fails.
+//
+// We also avoid async/await on the gesture-bearing path. Some browser builds
+// schedule the body of an `async function` as a microtask instead of running
+// it synchronously when called — if that happens, the user gesture is gone by
+// the time navigator.share() is invoked. Plain promise chains keep share() in
+// the synchronous portion of the click handler.
+function shareToWhatsApp(text, photoData) {
     if (!navigator.share) {
         // Desktop or unsupported browser fallback
         openWhatsAppWithText(text);
@@ -1665,48 +1672,32 @@ async function shareToWhatsApp(text, photoData) {
         }
     }
 
-    let shared = false;
+    const hasFiles = files.length > 0 && navigator.canShare && navigator.canShare({ files });
+    const payload = hasFiles
+        ? { title: 'Construction Report', text, files }
+        : { title: 'Construction Report', text };
 
-    // 1. Try sharing with files when supported.
-    if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
-        try {
-            await navigator.share({ title: 'Construction Report', text, files });
-            shared = true;
-            recordShareDiag(null); // clear previous error on success
-        } catch (err) {
-            if (err.name === 'AbortError') return; // user cancelled
+    navigator.share(payload).then(
+        () => {
+            recordShareDiag(null); // clear previous diagnostic on success
+        },
+        (err) => {
+            if (err && err.name === 'AbortError') return; // user cancelled
             recordShareDiag({
-                stage: 'files',
+                stage: hasFiles ? 'files' : 'text',
                 name: err && err.name,
                 message: err && err.message,
                 fileCount: files.length,
                 textLength: (text || '').length,
                 ts: Date.now()
             });
-            console.warn('File share failed:', err && err.name, err && err.message);
-            // Fall through to text-only.
-        }
-    }
-
-    // 2. Text-only share fallback. iOS often still has the user gesture if
-    //    the file share threw synchronously, so the share sheet still opens.
-    if (!shared) {
-        try {
-            await navigator.share({ title: 'Construction Report', text });
-            shared = true;
-        } catch (err) {
-            if (err.name === 'AbortError') return;
-            recordShareDiag({
-                stage: 'text',
-                name: err && err.name,
-                message: err && err.message,
-                ts: Date.now()
-            });
-            console.warn('Text share failed:', err && err.name, err && err.message);
-            // 3. Final fallback: whatsapp:// deep link.
+            console.warn('navigator.share failed:', err && err.name, err && err.message);
+            // Single-shot share failed. Open WhatsApp via deep link so at least
+            // the text reaches the recipient. We do NOT call navigator.share
+            // again — the gesture has been consumed.
             openWhatsAppWithText(text);
         }
-    }
+    );
 }
 
 // =============================================================
