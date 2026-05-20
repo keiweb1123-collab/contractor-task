@@ -1335,9 +1335,9 @@ async function renderAllReports() {
             }
             imagesHtml += `</div>`;
 
-            // Build one Share-to-WA button per group. Label each by unit so
-            // the user can see which slice of the report is going where. If
-            // there is only one group, keep the original generic label.
+            // Build one Share-to-WA button per group. Label shows the units
+            // that make up the group so the user can tell which slice each
+            // button sends. Single-group case keeps the generic label.
             let shareButtonsHtml = '';
             if (shareGroups.length <= 1) {
                 shareButtonsHtml = `<button class="copy-btn" data-share-idx="0" style="background:#25D366; color:white;">💬 Share to WA</button>`;
@@ -1345,8 +1345,8 @@ async function renderAllReports() {
                 for (let g = 0; g < shareGroups.length; g++) {
                     const grp = shareGroups[g];
                     let label = '💬 ';
-                    if (grp.unit) {
-                        label += escapeHtml(grp.unit);
+                    if (grp.groupLabel) {
+                        label += escapeHtml(grp.groupLabel);
                         if (grp.partTotal > 1) label += ` (${grp.partIndex + 1}/${grp.partTotal})`;
                     } else {
                         label += `Share to WA (${g + 1}/${shareGroups.length})`;
@@ -1624,73 +1624,128 @@ async function generateContractorReportData(contractor, urlSink) {
 const MAX_FILES_PER_SHARE = 10;
 const MAX_BYTES_PER_SHARE = 4 * 1024 * 1024;
 
+// Hard-coded share groupings per contractor, chosen by the user.
+// Each contractor's units are split into the explicit groups below — the
+// share UI renders one button per group, in the order listed here. Inside
+// a group, if the combined photo count exceeds MAX_FILES_PER_SHARE we still
+// sub-chunk that group into numbered parts.
+const SHARE_GROUPS_PER_CONTRACTOR = {
+    "IADECCO": [
+        ["Unit1", "Unit8", "Unit9", "Unit10"],
+        ["Unit11", "Unit14", "Unit15"]
+    ],
+    "YAMATO": [
+        ["Unit2", "Unit3A", "Unit12A", "Unit12B"],
+        ["Unit16", "Unit17", "Unit18", "Unit19"]
+    ],
+    "INTI INDAH": [
+        ["Unit3B", "Unit5", "Unit6", "Unit7"]
+    ]
+};
+
 function chunkUnitsForShare(contractor, unitBreakdown) {
     const dateStr = getDateKey().replace(/-/g, '');
     const groups = [];
 
-    // Strict per-unit grouping: every group represents exactly ONE unit so
-    // the recipient never sees two units' photos mixed under one report
-    // text. A unit with more than MAX_FILES_PER_SHARE photos is split into
-    // numbered sub-groups (1/2, 2/2, …) of its own; we never split it
-    // across other units.
-    for (const ub of unitBreakdown) {
-        const photosWithBlob = ub.photos.filter(p => p.blob);
-        const unitFiles = photosWithBlob.map((p, i) => {
-            const src = p.shareBlob || p.blob;
-            return new File([src], `${dateStr}_${p.unit}_${i + 1}.jpg`, { type: 'image/jpeg' });
-        });
-        const hasTask = !!ub.taskText;
+    // Build a lookup: unit name → its unitBreakdown entry.
+    const unitMap = new Map(unitBreakdown.map(ub => [ub.unit, ub]));
 
-        if (unitFiles.length === 0) {
-            // Unit has no photos. Emit a text-only group only if there are
-            // tasks worth sharing.
-            if (hasTask) {
-                groups.push({
-                    unit: ub.unit,
-                    text: `${contractor}\n${ub.taskText.trimEnd()}`.trim(),
-                    files: [],
-                    photoData: [],
-                    partIndex: 0,
-                    partTotal: 1
-                });
+    // Determine this contractor's share groupings. Falls back to "one big
+    // group per contractor" only for unrecognised contractors (shouldn't
+    // happen for IADECCO / YAMATO / INTI INDAH).
+    const plan = SHARE_GROUPS_PER_CONTRACTOR[contractor]
+        || [unitBreakdown.map(ub => ub.unit)];
+
+    for (let planIdx = 0; planIdx < plan.length; planIdx++) {
+        const unitNames = plan[planIdx];
+        const groupLabel = unitNames.join(', ');
+
+        // Gather files / photos / task texts for the units in this plan
+        // group, in plan order. Units that don't currently have entries in
+        // unitBreakdown (e.g. no tasks and no photos today) are skipped.
+        const groupFiles = [];
+        const groupPhotos = [];
+        const taskLines = [];
+        for (const name of unitNames) {
+            const ub = unitMap.get(name);
+            if (!ub) continue;
+            if (ub.taskText) taskLines.push(ub.taskText.trimEnd());
+            const photosWithBlob = ub.photos.filter(p => p.blob);
+            for (let i = 0; i < photosWithBlob.length; i++) {
+                const p = photosWithBlob[i];
+                const src = p.shareBlob || p.blob;
+                groupFiles.push(new File([src], `${dateStr}_${ub.unit}_${i + 1}.jpg`, { type: 'image/jpeg' }));
+                groupPhotos.push(p);
             }
+        }
+
+        // Nothing in this plan group → skip its button entirely.
+        if (groupFiles.length === 0 && taskLines.length === 0) continue;
+
+        // Text-only group (units have tasks but no photos today).
+        if (groupFiles.length === 0) {
+            groups.push({
+                groupLabel,
+                planIdx,
+                text: [contractor, ...taskLines].join('\n').trim(),
+                files: [],
+                photoData: [],
+                partIndex: 0,
+                partTotal: 1
+            });
             continue;
         }
 
-        // Unit has photos. Slice them into MAX_FILES_PER_SHARE-sized chunks,
-        // each becoming its own group. The first chunk carries the unit's
-        // task text; subsequent chunks just identify themselves as
-        // continuations so the message thread stays readable.
-        const totalChunks = Math.ceil(unitFiles.length / MAX_FILES_PER_SHARE);
-        for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-            const start = chunkIdx * MAX_FILES_PER_SHARE;
-            const end = Math.min(start + MAX_FILES_PER_SHARE, unitFiles.length);
-            const chunkFiles = unitFiles.slice(start, end);
-            const chunkPhotos = photosWithBlob.slice(start, end);
+        // Fits in one share.
+        if (groupFiles.length <= MAX_FILES_PER_SHARE) {
+            groups.push({
+                groupLabel,
+                planIdx,
+                text: [contractor, ...taskLines].join('\n').trim(),
+                files: groupFiles,
+                photoData: groupPhotos,
+                partIndex: 0,
+                partTotal: 1
+            });
+            continue;
+        }
+
+        // Too many photos for this plan group → sub-chunk by file count.
+        // The first sub-chunk carries the full task text for the group;
+        // subsequent sub-chunks just say "GroupLabel (写真 n/N)" so the
+        // recipient sees a clear continuation.
+        const totalParts = Math.ceil(groupFiles.length / MAX_FILES_PER_SHARE);
+        for (let partIdx = 0; partIdx < totalParts; partIdx++) {
+            const start = partIdx * MAX_FILES_PER_SHARE;
+            const end = Math.min(start + MAX_FILES_PER_SHARE, groupFiles.length);
+            const partFiles = groupFiles.slice(start, end);
+            const partPhotos = groupPhotos.slice(start, end);
 
             const lines = [contractor];
-            if (chunkIdx === 0 && hasTask) {
-                lines.push(ub.taskText.trimEnd());
-            } else if (chunkIdx > 0) {
-                lines.push(`${ub.unit} (写真 ${chunkIdx + 1}/${totalChunks})`);
+            if (partIdx === 0) {
+                lines.push(...taskLines);
+            } else {
+                lines.push(`${groupLabel} (写真 ${partIdx + 1}/${totalParts})`);
             }
 
             groups.push({
-                unit: ub.unit,
+                groupLabel,
+                planIdx,
                 text: lines.join('\n').trim(),
-                files: chunkFiles,
-                photoData: chunkPhotos,
-                partIndex: chunkIdx,
-                partTotal: totalChunks
+                files: partFiles,
+                photoData: partPhotos,
+                partIndex: partIdx,
+                partTotal: totalParts
             });
         }
     }
 
     if (groups.length === 0) {
-        // Contractor with no units / nothing to share — still emit one group
-        // so the report card has a Share-to-WA button to copy the header.
+        // Nothing to share — still emit one text-only group so the card
+        // shows a Share-to-WA button.
         groups.push({
-            unit: null,
+            groupLabel: '',
+            planIdx: 0,
             text: contractor,
             files: [],
             photoData: [],
