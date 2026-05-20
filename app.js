@@ -40,8 +40,6 @@ let isWideActive = false;
 let currentFacingMode = "environment";
 let isFlashOn = false;
 let yesterdayReport = null; // { date, data } — text-only snapshot
-let previewObjectUrls = []; // legacy — kept so older callers don't crash, no longer pushed to
-let reportObjectUrls = [];  // legacy — kept so older callers don't crash, no longer pushed to
 let overtimeData = {};  // { "IADECCO": "◯"|"×", "YAMATO": "◯"|"×", "INTI INDAH": "◯"|"×" }
 
 // Cache: photoId → { url, blob }. Each saved image gets exactly one Object URL
@@ -141,11 +139,6 @@ function getDateKey(d) {
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
 }
-
-// Retained as no-ops so any future caller doesn't crash. The new photoUrlCache
-// owns URL lifetimes per-photo, so per-render revoke is unnecessary.
-function revokePreviewUrls() { previewObjectUrls = []; }
-function revokeReportUrls()  { reportObjectUrls  = []; }
 
 function stripPhotos(data) {
     const copy = {};
@@ -256,7 +249,6 @@ function resetSelection() {
     document.getElementById("custom-task-input").value = "";
     document.getElementById("task-list-display").innerHTML = "";
     document.getElementById("preview-gallery").innerHTML = "";
-    revokePreviewUrls();
     stopCamera();
     renderAllReports();
 }
@@ -1166,8 +1158,21 @@ async function loadLocalData() {
         // Migration: unify contractor key "INITI INDAH" → "INTI INDAH"
         // Older builds stored the third contractor under the misspelled key
         // "INITI INDAH". Rename it in place so saved tasks/photos keep working.
-        const migrated = migrateContractorKey(currentReport, "INITI INDAH", "INTI INDAH")
-            || (yesterdayReport && yesterdayReport.data && migrateContractorKey(yesterdayReport.data, "INITI INDAH", "INTI INDAH"));
+        // Also migrate the overtime store, which was previously missed and
+        // could silently drop yesterday's "INITI INDAH" overtime value.
+        let migrated = migrateContractorKey(currentReport, "INITI INDAH", "INTI INDAH");
+        if (yesterdayReport && yesterdayReport.data
+            && migrateContractorKey(yesterdayReport.data, "INITI INDAH", "INTI INDAH")) {
+            migrated = true;
+        }
+        if (overtimeData && Object.prototype.hasOwnProperty.call(overtimeData, "INITI INDAH")) {
+            // Prefer an existing value under the new key (if both exist).
+            if (overtimeData["INTI INDAH"] == null) {
+                overtimeData["INTI INDAH"] = overtimeData["INITI INDAH"];
+            }
+            delete overtimeData["INITI INDAH"];
+            migrated = true;
+        }
         if (migrated) await saveLocalData();
     } catch (e) { console.error("IndexedDB load failed:", e); }
 }
@@ -1329,6 +1334,7 @@ async function renderAllReports() {
             let imagesHtml = `<div class="preview-gallery">`;
             if (photoData) {
                 photoData.forEach((item, idx) => {
+                    if (!item.url) return; // guard: never emit <img src=""> if a photo failed to load
                     const filename = `${dateStr}_${item.unit}_${idx + 1}.jpg`;
                     imagesHtml += `<a href="${item.url}" download="${filename}"><img src="${item.url}" class="preview-img"></a>`;
                 });
@@ -1569,7 +1575,9 @@ async function generateContractorReportData(contractor, urlSink) {
                 url = photo;
                 try {
                     fileBlob = await (await fetch(url)).blob();
-                } catch(e) {}
+                } catch(e) {
+                    console.warn('Legacy string-photo blob fetch failed:', e);
+                }
             }
             let cacheEntry = null;
             if (photo.type === 'db_ref') {
