@@ -1655,47 +1655,43 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         const unitNames = plan[planIdx];
         const groupLabel = unitNames.join(', ');
 
-        // Gather files / photos / task texts for the units in this plan
-        // group, in plan order. Units that don't currently have entries in
-        // unitBreakdown (e.g. no tasks and no photos today) are skipped.
-        // IMPORTANT: even when a unit has only photos and no tasks, we still
-        // emit "Unit1:" as a header line so the recipient can correlate
-        // photos with units. The bug fixed here was that the share text
-        // collapsed to just the contractor name when none of the group's
-        // units had tasks today.
-        const groupFiles = [];
-        const groupPhotos = [];
-        const taskLines = [];
+        // Build a per-photo item list (preserves unit info on every photo)
+        // and a separate list of units that contribute only tasks, no photos.
+        // Tasks-only units ride along with the FIRST sub-chunk's text so
+        // their tasks still reach the recipient.
+        const items = []; // [{ unit, taskText, file, photo }]
+        const tasksOnlyUnits = []; // [{ unit, taskText }]
         for (const name of unitNames) {
             const ub = unitMap.get(name);
             if (!ub) continue;
             const photosWithBlob = ub.photos.filter(p => p.blob);
-            const hasAnyContent = ub.taskText || photosWithBlob.length > 0;
-            if (!hasAnyContent) continue;
-            if (ub.taskText) {
-                taskLines.push(ub.taskText.trimEnd());
-            } else {
-                // No tasks but has photos — keep the unit name visible so
-                // the recipient knows which unit these photos belong to.
-                taskLines.push(`${ub.unit}:`);
+            if (photosWithBlob.length === 0) {
+                if (ub.taskText) tasksOnlyUnits.push({ unit: ub.unit, taskText: ub.taskText });
+                continue;
             }
             for (let i = 0; i < photosWithBlob.length; i++) {
                 const p = photosWithBlob[i];
                 const src = p.shareBlob || p.blob;
-                groupFiles.push(new File([src], `${dateStr}_${ub.unit}_${i + 1}.jpg`, { type: 'image/jpeg' }));
-                groupPhotos.push(p);
+                items.push({
+                    unit: ub.unit,
+                    taskText: ub.taskText,
+                    file: new File([src], `${dateStr}_${ub.unit}_${i + 1}.jpg`, { type: 'image/jpeg' }),
+                    photo: p,
+                });
             }
         }
 
-        // Nothing in this plan group → skip its button entirely.
-        if (groupFiles.length === 0 && taskLines.length === 0) continue;
+        // Nothing at all in this plan group → skip its button entirely.
+        if (items.length === 0 && tasksOnlyUnits.length === 0) continue;
 
-        // Text-only group (units have tasks but no photos today).
-        if (groupFiles.length === 0) {
+        // Text-only group (no photos for any unit in this plan group today).
+        if (items.length === 0) {
+            const lines = [contractor];
+            for (const u of tasksOnlyUnits) lines.push(u.taskText.trimEnd());
             groups.push({
                 groupLabel,
                 planIdx,
-                text: [contractor, ...taskLines].join('\n').trim(),
+                text: lines.join('\n').trim(),
                 files: [],
                 photoData: [],
                 partIndex: 0,
@@ -1704,43 +1700,61 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
             continue;
         }
 
-        // Fits in one share.
-        if (groupFiles.length <= MAX_FILES_PER_SHARE) {
-            groups.push({
-                groupLabel,
-                planIdx,
-                text: [contractor, ...taskLines].join('\n').trim(),
-                files: groupFiles,
-                photoData: groupPhotos,
-                partIndex: 0,
-                partTotal: 1
-            });
-            continue;
-        }
+        // Group has photos → emit one share per MAX_FILES_PER_SHARE-sized
+        // sub-chunk. Each sub-chunk's text shows the tasks for ONLY the
+        // units whose photos appear in that chunk for the first time,
+        // honoring the user's rule:
+        //   "1回目ならタスク、2回目ならタスクは書かなくていいが、
+        //    次のユニットの画像があるならそのタスクはかけ"
+        // Tasks-only units (no photos) are flushed into the first chunk.
+        const totalParts = Math.ceil(items.length / MAX_FILES_PER_SHARE);
+        const tasksShown = new Set();
 
-        // Too many photos for this plan group → sub-chunk by file count.
-        // First sub-chunk carries the full task text; subsequent ones go
-        // out with just the contractor header so the recipient sees the
-        // same identity without a "1/2"-style annotation that the user
-        // explicitly didn't want.
-        const totalParts = Math.ceil(groupFiles.length / MAX_FILES_PER_SHARE);
         for (let partIdx = 0; partIdx < totalParts; partIdx++) {
             const start = partIdx * MAX_FILES_PER_SHARE;
-            const end = Math.min(start + MAX_FILES_PER_SHARE, groupFiles.length);
-            const partFiles = groupFiles.slice(start, end);
-            const partPhotos = groupPhotos.slice(start, end);
+            const end = Math.min(start + MAX_FILES_PER_SHARE, items.length);
+            const partItems = items.slice(start, end);
+
+            // Walk this chunk's photos in order; collect units in first-
+            // appearance order across the whole share, marking them shown
+            // so later chunks don't duplicate their tasks.
+            const newUnits = []; // [{ unit, taskText }] for units first seen here
+            const seenInPart = new Set();
+            for (const it of partItems) {
+                if (seenInPart.has(it.unit)) continue;
+                seenInPart.add(it.unit);
+                if (!tasksShown.has(it.unit)) {
+                    newUnits.push({ unit: it.unit, taskText: it.taskText });
+                    tasksShown.add(it.unit);
+                }
+            }
 
             const lines = [contractor];
             if (partIdx === 0) {
-                lines.push(...taskLines);
+                // Carry tasks-only units' tasks in the very first sub-chunk
+                // so they don't get dropped.
+                for (const u of tasksOnlyUnits) {
+                    lines.push(u.taskText.trimEnd());
+                    tasksShown.add(u.unit);
+                }
+            }
+            for (const u of newUnits) {
+                if (u.taskText) {
+                    lines.push(u.taskText.trimEnd());
+                } else {
+                    // No tasks for this unit, but its photos are here for the
+                    // first time → at least show the unit name so the
+                    // recipient knows whose photos these are.
+                    lines.push(`${u.unit}:`);
+                }
             }
 
             groups.push({
                 groupLabel,
                 planIdx,
                 text: lines.join('\n').trim(),
-                files: partFiles,
-                photoData: partPhotos,
+                files: partItems.map(it => it.file),
+                photoData: partItems.map(it => it.photo),
                 partIndex: partIdx,
                 partTotal: totalParts
             });
