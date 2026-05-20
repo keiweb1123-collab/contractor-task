@@ -1658,14 +1658,27 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         // Gather files / photos / task texts for the units in this plan
         // group, in plan order. Units that don't currently have entries in
         // unitBreakdown (e.g. no tasks and no photos today) are skipped.
+        // IMPORTANT: even when a unit has only photos and no tasks, we still
+        // emit "Unit1:" as a header line so the recipient can correlate
+        // photos with units. The bug fixed here was that the share text
+        // collapsed to just the contractor name when none of the group's
+        // units had tasks today.
         const groupFiles = [];
         const groupPhotos = [];
         const taskLines = [];
         for (const name of unitNames) {
             const ub = unitMap.get(name);
             if (!ub) continue;
-            if (ub.taskText) taskLines.push(ub.taskText.trimEnd());
             const photosWithBlob = ub.photos.filter(p => p.blob);
+            const hasAnyContent = ub.taskText || photosWithBlob.length > 0;
+            if (!hasAnyContent) continue;
+            if (ub.taskText) {
+                taskLines.push(ub.taskText.trimEnd());
+            } else {
+                // No tasks but has photos — keep the unit name visible so
+                // the recipient knows which unit these photos belong to.
+                taskLines.push(`${ub.unit}:`);
+            }
             for (let i = 0; i < photosWithBlob.length; i++) {
                 const p = photosWithBlob[i];
                 const src = p.shareBlob || p.blob;
