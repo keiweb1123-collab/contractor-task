@@ -1709,11 +1709,28 @@ function shareToWhatsApp(text, photoData) {
 // small footer line under the version label.
 const SHARE_DIAG_KEY = 'construction_log_share_diag';
 
+function getEnvSnapshot() {
+    // Collected at runtime so the diagnostic line includes enough context
+    // to tell whether the failure is browser / WebView / in-app related.
+    const ua = (navigator.userAgent || '').slice(0, 200);
+    let mode = 'browser';
+    try {
+        if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) mode = 'standalone-pwa';
+        else if (window.matchMedia && window.matchMedia('(display-mode: minimal-ui)').matches) mode = 'minimal-ui';
+    } catch (_) {}
+    const hasShare = !!navigator.share;
+    const hasCanShare = !!(navigator.canShare);
+    return { ua, mode, hasShare, hasCanShare };
+}
+
 function recordShareDiag(info) {
     try {
         if (info === null) {
             localStorage.removeItem(SHARE_DIAG_KEY);
         } else {
+            // Always attach the env snapshot so we know the runtime context
+            // any failure happened in.
+            info.env = getEnvSnapshot();
             localStorage.setItem(SHARE_DIAG_KEY, JSON.stringify(info));
         }
         renderShareDiag();
@@ -1729,10 +1746,29 @@ function renderShareDiag() {
     try {
         const info = JSON.parse(raw);
         const when = new Date(info.ts).toLocaleTimeString();
-        let detail = `[${when}] share(${info.stage}) failed: ${info.name || 'unknown'}`;
-        if (info.message) detail += ` — ${info.message}`;
-        if (info.fileCount != null) detail += ` (files=${info.fileCount}, text=${info.textLength})`;
-        el.textContent = detail;
+        let line1 = `[${when}] share(${info.stage}) failed: ${info.name || 'unknown'}`;
+        if (info.message) line1 += ` — ${info.message}`;
+        if (info.fileCount != null) line1 += ` (files=${info.fileCount}, text=${info.textLength})`;
+
+        let line2 = '';
+        if (info.env) {
+            line2 = `env: ${info.env.mode}, share=${info.env.hasShare}, canShare=${info.env.hasCanShare}`;
+            if (info.env.ua) line2 += `\nUA: ${info.env.ua}`;
+        }
+
+        // Show line 1 prominently in red; environment in a slightly smaller
+        // gray block below.
+        el.innerHTML = '';
+        const top = document.createElement('div');
+        top.textContent = line1;
+        const bottom = document.createElement('div');
+        bottom.style.color = '#6b7280';
+        bottom.style.fontSize = '0.65rem';
+        bottom.style.marginTop = '4px';
+        bottom.style.whiteSpace = 'pre-wrap';
+        bottom.textContent = line2;
+        el.appendChild(top);
+        el.appendChild(bottom);
     } catch (_) {
         el.textContent = '';
     }
