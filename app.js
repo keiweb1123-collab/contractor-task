@@ -131,6 +131,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadLocalData();
     initGrid();
     renderAllReports();
+    renderShareDiag();
 });
 
 function initGrid() {
@@ -1671,8 +1672,17 @@ async function shareToWhatsApp(text, photoData) {
         try {
             await navigator.share({ title: 'Construction Report', text, files });
             shared = true;
+            recordShareDiag(null); // clear previous error on success
         } catch (err) {
             if (err.name === 'AbortError') return; // user cancelled
+            recordShareDiag({
+                stage: 'files',
+                name: err && err.name,
+                message: err && err.message,
+                fileCount: files.length,
+                textLength: (text || '').length,
+                ts: Date.now()
+            });
             console.warn('File share failed:', err && err.name, err && err.message);
             // Fall through to text-only.
         }
@@ -1686,10 +1696,54 @@ async function shareToWhatsApp(text, photoData) {
             shared = true;
         } catch (err) {
             if (err.name === 'AbortError') return;
+            recordShareDiag({
+                stage: 'text',
+                name: err && err.name,
+                message: err && err.message,
+                ts: Date.now()
+            });
             console.warn('Text share failed:', err && err.name, err && err.message);
             // 3. Final fallback: whatsapp:// deep link.
             openWhatsAppWithText(text);
         }
+    }
+}
+
+// =============================================================
+// SHARE DIAGNOSTICS
+// =============================================================
+// When navigator.share({files}) silently fails on iOS, the only signal is
+// in console — which mobile users can't see. We persist the most recent
+// share error to localStorage so renderShareDiag() can surface it as a
+// small footer line under the version label.
+const SHARE_DIAG_KEY = 'construction_log_share_diag';
+
+function recordShareDiag(info) {
+    try {
+        if (info === null) {
+            localStorage.removeItem(SHARE_DIAG_KEY);
+        } else {
+            localStorage.setItem(SHARE_DIAG_KEY, JSON.stringify(info));
+        }
+        renderShareDiag();
+    } catch (_) { /* localStorage may be unavailable */ }
+}
+
+function renderShareDiag() {
+    const el = document.getElementById('share-diag');
+    if (!el) return;
+    let raw;
+    try { raw = localStorage.getItem(SHARE_DIAG_KEY); } catch (_) { raw = null; }
+    if (!raw) { el.textContent = ''; return; }
+    try {
+        const info = JSON.parse(raw);
+        const when = new Date(info.ts).toLocaleTimeString();
+        let detail = `[${when}] share(${info.stage}) failed: ${info.name || 'unknown'}`;
+        if (info.message) detail += ` — ${info.message}`;
+        if (info.fileCount != null) detail += ` (files=${info.fileCount}, text=${info.textLength})`;
+        el.textContent = detail;
+    } catch (_) {
+        el.textContent = '';
     }
 }
 
