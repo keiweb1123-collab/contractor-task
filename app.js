@@ -996,33 +996,41 @@ async function getImageFromDB(id) {
     const tx = db.transaction(IMG_STORE, "readonly");
     const req = tx.objectStore(IMG_STORE).get(id);
 
-    // ⚠️ iOS Safari WebKit bug (long-standing): Blobs read from IndexedDB are
-    // backed by the transaction. Once the transaction auto-commits — which
-    // happens as soon as we hand control back to the event loop after the
-    // get() resolves — the Blob can be "neutered". A neutered Blob looks
-    // valid but reads return empty data and navigator.share({files: [blob]})
-    // throws a non-AbortError. INTI INDAH (few photos) worked because the
-    // share() ran before any Blob neutered; IADECCO/YAMATO (many photos) hit
-    // the window where at least one Blob in the batch had gone bad.
-    //
-    // Fix: read the Blob's bytes via arrayBuffer() inside the success handler
-    // (i.e. before the transaction commits), then wrap the bytes in a fresh
-    // memory-only Blob that no longer references the database. The returned
-    // Blob is now safe to cache and share later.
+    // The stored value is either:
+    //   - (v59+) a `data:image/jpeg;base64,...` string. Strings have no IDB
+    //     binding so they survive any transaction commit and can't be
+    //     "neutered" by the long-standing iOS Safari WebKit bug.
+    //   - (legacy) a Blob written by older builds. Blobs read from IDB on
+    //     Safari can lose their backing bytes once the transaction commits
+    //     (the "neuter" bug), which silently broke navigator.share({files}).
+    //     For legacy entries we eagerly copy the bytes via arrayBuffer()
+    //     inside the success handler — i.e. before the txn commits — so the
+    //     returned Blob is fully detached from IndexedDB.
     const result = await new Promise((resolve, reject) => {
         req.onsuccess = () => {
-            const idbBlob = req.result;
-            if (!idbBlob) { resolve(null); return; }
-            idbBlob.arrayBuffer().then(
-                ab => resolve(new Blob([ab], { type: idbBlob.type || 'image/jpeg' })),
-                e => { console.warn('IDB Blob detach failed; using raw blob:', e); resolve(idbBlob); }
+            const value = req.result;
+            if (!value) { resolve(null); return; }
+
+            if (typeof value === 'string') {
+                // v59+ data URL path — convert to a memory-only Blob.
+                fetch(value)
+                    .then(r => r.blob())
+                    .then(b => resolve(b))
+                    .catch(e => { console.warn('data URL → Blob failed:', e); resolve(null); });
+                return;
+            }
+
+            // Legacy Blob path — eager-detach.
+            value.arrayBuffer().then(
+                ab => resolve(new Blob([ab], { type: value.type || 'image/jpeg' })),
+                e => { console.warn('IDB Blob detach failed; using raw blob:', e); resolve(value); }
             );
         };
         req.onerror = () => reject(req.error);
     });
 
-    // Close the connection. The Blob we return no longer needs it because
-    // it's been copied into memory above.
+    // Close the connection. Returned value is memory-only and no longer
+    // needs the database handle.
     try { db.close(); } catch (_) { }
     return result;
 }
@@ -1127,7 +1135,7 @@ window.addEventListener("beforeunload", () => {
 
 function savePhoto(dataUrl) {
     // Snapshot the target unit at capture time. If the user closes the input
-    // section before the async Blob save completes, `selectedUnit` would be
+    // section before the async save completes, `selectedUnit` would be
     // null, which previously made `getContractor(null)` fall through to
     // "Unassigned" and silently create a phantom contractor entry.
     const targetUnit = selectedUnit;
@@ -1141,11 +1149,15 @@ function savePhoto(dataUrl) {
         return;
     }
 
-    fetch(dataUrl)
-        .then(res => res.blob())
-        .then(async blob => {
+    // Save the data URL STRING directly to IndexedDB instead of converting it
+    // to a Blob first. Storing strings sidesteps the long-standing iOS Safari
+    // bug where Blobs read from IndexedDB get "neutered" after the originating
+    // transaction commits — neutered Blobs silently break navigator.share({files}).
+    // Strings have no transaction binding, so they stay valid forever.
+    (async () => {
+        try {
             const id = crypto.randomUUID();
-            await saveImageToDB(id, blob);
+            await saveImageToDB(id, dataUrl);
             if (!currentReport[contractor]) currentReport[contractor] = {};
             if (!currentReport[contractor][targetUnit]) currentReport[contractor][targetUnit] = { tasks: [], photos: [] };
             currentReport[contractor][targetUnit].photos.push({ type: 'db_ref', id: id, timestamp: Date.now() });
@@ -1153,8 +1165,10 @@ function savePhoto(dataUrl) {
             // same unit they captured for.
             if (selectedUnit === targetUnit) renderPhotoPreview();
             saveLocalData();
-        })
-        .catch(err => console.error("Save failed:", err));
+        } catch (err) {
+            console.error("Save failed:", err);
+        }
+    })();
 }
 
 async function renderPhotoPreview() {
@@ -1622,16 +1636,14 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
 }
 
 // Share to WhatsApp
-// - Web Share API available: navigator.share (share sheet → pick WhatsApp)
-// - Otherwise: whatsapp:// deep link
+// - With photos: navigator.share({files}) → OS share sheet → pick WhatsApp
+// - If file share fails: navigator.share({text}) silently → share sheet → text only
+// - If text share also fails: whatsapp:// deep link as last resort
 //
-// CRITICAL: navigator.share is called AT MOST ONCE per click. The previous
-// implementation tried with files first, then text on failure, but that
-// second call had no user gesture left on iOS — it threw NotAllowedError
-// which the code mistook for a generic failure and fell through to the
-// whatsapp:// deep link, producing the "Open WhatsApp?" popup IADECCO/YAMATO
-// users were reporting. We now decide the payload up front and only call
-// share() once.
+// We chain fallbacks SILENTLY (no confirm dialogs) so the user gets the
+// smoothest path that actually works on their device. The user explicitly
+// asked for this — the previous v56-v58 versions interrupted the flow with
+// an extra confirm + popup, which broke their muscle memory.
 async function shareToWhatsApp(text, photoData) {
     if (!navigator.share) {
         // Desktop or unsupported browser fallback
@@ -1639,9 +1651,8 @@ async function shareToWhatsApp(text, photoData) {
         return;
     }
 
-    // Build file list once. The caller (renderAllReports) has already capped
-    // photoData to MAX_FILES_PER_SHARE via chunkUnitsForShare, so the file
-    // count here is safe to pass to navigator.share.
+    // Build files. Caller (renderAllReports) has already capped photoData to
+    // MAX_FILES_PER_SHARE via chunkUnitsForShare.
     const files = [];
     if (photoData && photoData.length > 0) {
         const dateStr = getDateKey().replace(/-/g, '');
@@ -1653,47 +1664,32 @@ async function shareToWhatsApp(text, photoData) {
         }
     }
 
-    // Decide payload before consuming the gesture.
-    let payload;
+    let shared = false;
+
+    // 1. Try sharing with files when supported.
     if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
-        payload = { title: 'Construction Report', text, files };
-    } else {
-        payload = { title: 'Construction Report', text };
+        try {
+            await navigator.share({ title: 'Construction Report', text, files });
+            shared = true;
+        } catch (err) {
+            if (err.name === 'AbortError') return; // user cancelled
+            console.warn('File share failed:', err && err.name, err && err.message);
+            // Fall through to text-only.
+        }
     }
 
-    try {
-        await navigator.share(payload);
-    } catch (err) {
-        if (err.name === 'AbortError') return; // user cancelled — fine
-
-        // Diagnostic: log the full error so it shows up in any attached
-        // remote debugger / web inspector.
-        console.error(
-            'navigator.share failed:',
-            err && err.name,
-            err && err.message,
-            { hasFiles: !!payload.files, fileCount: (payload.files || []).length, textLength: (text || '').length }
-        );
-
-        if (!payload.files) {
-            // Text-only share failed for some non-cancel reason — deep link
-            // is the only remaining option and we have no photos to lose.
+    // 2. Text-only share fallback. iOS often still has the user gesture if
+    //    the file share threw synchronously, so the share sheet still opens.
+    if (!shared) {
+        try {
+            await navigator.share({ title: 'Construction Report', text });
+            shared = true;
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.warn('Text share failed:', err && err.name, err && err.message);
+            // 3. Final fallback: whatsapp:// deep link.
             openWhatsAppWithText(text);
-            return;
         }
-
-        // File share failed. Surface the error name in the confirm dialog so
-        // the user can report it back to us (it's the fastest path to a real
-        // root-cause fix). Offer the text-only deep-link fallback so the
-        // report at least reaches WhatsApp — photos can be sent separately
-        // via "Save Photos".
-        const errName = (err && err.name) ? err.name : 'unknown';
-        const proceed = confirm(
-            `写真付きで共有できませんでした (${errName})。\n\n` +
-            `テキストのみで WhatsApp を開きますか?\n` +
-            `写真は「📥 Save Photos」で個別保存して別送してください。`
-        );
-        if (proceed) openWhatsAppWithText(text);
     }
 }
 
