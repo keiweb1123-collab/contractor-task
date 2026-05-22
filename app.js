@@ -214,6 +214,52 @@ function getContractorColor(contractor) {
 }
 
 // =============================================================
+// NAVIGATION / HISTORY (back-button & swipe-back support)
+// =============================================================
+// Every time the user opens a full-screen overlay (input section, camera,
+// task option modal) we push a history entry so the browser's back gesture
+// closes that overlay instead of leaving the app. Our own close buttons
+// route through navBack() so the history stack and the visible UI stay in
+// sync.
+//
+// navStack mirrors what's currently open, from bottom to top:
+//   []                          → main grid (no overlay)
+//   ['input']                   → input section open
+//   ['input', 'camera']         → input section + camera overlay on top
+//   ['input', 'modal']          → input section + task-option modal on top
+const navStack = [];
+
+function navPush(layer) {
+    navStack.push(layer);
+    try { history.pushState({ layer, depth: navStack.length }, '', ''); } catch (_) { }
+}
+
+// User-initiated close. Triggers popstate, which runs the actual UI cleanup.
+function navBack() {
+    if (navStack.length === 0) return;
+    try { history.back(); } catch (_) {
+        // If history.back() fails, fall back to direct close so the UI
+        // doesn't get stuck.
+        const layer = navStack.pop();
+        closeLayerUI(layer);
+    }
+}
+
+window.addEventListener('popstate', (e) => {
+    const targetDepth = (e && e.state && typeof e.state.depth === 'number') ? e.state.depth : 0;
+    while (navStack.length > targetDepth) {
+        const layer = navStack.pop();
+        try { closeLayerUI(layer); } catch (err) { console.warn('close layer error:', err); }
+    }
+});
+
+function closeLayerUI(layer) {
+    if (layer === 'modal') closeModalUI();
+    else if (layer === 'camera') closeCameraUI();
+    else if (layer === 'input') closeInputUI();
+}
+
+// =============================================================
 // UI
 // =============================================================
 function openInput(unit, contractor) {
@@ -237,9 +283,17 @@ function openInput(unit, contractor) {
     renderPhotoPreview();
     refreshCopyYesterdayBtn();
     switchTab('photo');
+    navPush('input');
 }
 
+// User-facing close (× button on input section). Routes through history so
+// the back-stack and the UI stay in sync.
 function resetSelection() {
+    navBack();
+}
+
+// Actual UI cleanup, called by popstate when the 'input' layer pops off.
+function closeInputUI() {
     document.body.style.overflow = "auto";
     document.getElementById("input-section").classList.add("hidden");
     selectedUnit = null;
@@ -249,7 +303,10 @@ function resetSelection() {
     document.getElementById("custom-task-input").value = "";
     document.getElementById("task-list-display").innerHTML = "";
     document.getElementById("preview-gallery").innerHTML = "";
-    stopCamera();
+    // Stop the camera stream WITHOUT touching navStack — if the 'camera'
+    // layer was still on top, popstate already popped it first.
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
+    document.getElementById("camera-overlay").classList.add("hidden");
     renderAllReports();
 }
 
@@ -320,6 +377,7 @@ function openTaskOption(taskName, type) {
 
     modal.classList.remove("hidden");
     modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+    navPush('modal');
 }
 
 function toggleOption(btn, value) {
@@ -546,7 +604,18 @@ function confirmModalSelection() {
     closeModal();
 }
 
+// User-facing close (Back button / outside-click). Routes through history.
 function closeModal() {
+    if (navStack[navStack.length - 1] === 'modal') {
+        navBack();
+    } else {
+        // Defensive: modal somehow open without nav entry — just hide.
+        closeModalUI();
+    }
+}
+
+// Actual UI cleanup, called by popstate when the 'modal' layer pops off.
+function closeModalUI() {
     document.getElementById("option-modal").classList.add("hidden");
 }
 
@@ -739,6 +808,7 @@ async function startCamera() {
         video.srcObject = cameraStream;
         video.style.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
         document.getElementById("camera-overlay").classList.remove("hidden");
+        navPush('camera');
 
         checkFlashCapability();
 
@@ -866,11 +936,32 @@ function stopCameraStreamOnly() {
     if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
 }
 
-function closeCameraOverlay() { stopCamera(); }
+// User-facing close (× on camera overlay, or after capturePhoto). Routes
+// through history so back-gesture and our buttons behave the same way.
+function closeCameraOverlay() {
+    if (navStack[navStack.length - 1] === 'camera') {
+        navBack();
+    } else {
+        // Defensive: camera open without nav entry — just stop.
+        closeCameraUI();
+    }
+}
 
-function stopCamera() {
+// Actual UI cleanup, called by popstate (or directly when nav is out of sync).
+function closeCameraUI() {
     if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
     document.getElementById("camera-overlay").classList.add("hidden");
+}
+
+// Legacy alias retained for callers (e.g. switchTab) that want to make sure
+// the camera is stopped without affecting nav history.
+function stopCamera() {
+    if (navStack[navStack.length - 1] === 'camera') {
+        // Going through navBack keeps history in sync.
+        navBack();
+    } else {
+        closeCameraUI();
+    }
 }
 
 function capturePhoto() {
@@ -999,6 +1090,8 @@ function saveAndClose() {
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
     currentReport[contractor][selectedUnit].tasks = currentTaskList.map(t => ({ text: t }));
     saveLocalData();
+    // resetSelection routes through navBack — keeps history in sync so the
+    // user can still back-gesture cleanly afterwards.
     resetSelection();
 }
 
