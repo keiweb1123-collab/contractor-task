@@ -1694,12 +1694,16 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
 
         // Text-only group (no photos for any unit in this plan group today).
         if (items.length === 0) {
-            const lines = [contractor];
-            for (const u of tasksOnlyUnits) lines.push(u.taskText.trimEnd());
+            const unitBlocks = tasksOnlyUnits.map(u => u.taskText.trimEnd());
+            // Join unit blocks with a blank line between them so the recipient
+            // can visually separate each unit (matches Copy Text formatting).
+            const text = unitBlocks.length > 0
+                ? `${contractor}\n${unitBlocks.join('\n\n')}`
+                : contractor;
             groups.push({
                 groupLabel,
                 planIdx,
-                text: lines.join('\n').trim(),
+                text,
                 files: [],
                 photoData: [],
                 partIndex: 0,
@@ -1737,30 +1741,35 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
                 }
             }
 
-            const lines = [contractor];
+            // Collect each unit's text as its own block so we can join
+            // them with a blank line between (mirrors Copy Text format).
+            const unitBlocks = [];
             if (partIdx === 0) {
                 // Carry tasks-only units' tasks in the very first sub-chunk
                 // so they don't get dropped.
                 for (const u of tasksOnlyUnits) {
-                    lines.push(u.taskText.trimEnd());
+                    unitBlocks.push(u.taskText.trimEnd());
                     tasksShown.add(u.unit);
                 }
             }
             for (const u of newUnits) {
                 if (u.taskText) {
-                    lines.push(u.taskText.trimEnd());
+                    unitBlocks.push(u.taskText.trimEnd());
                 } else {
                     // No tasks for this unit, but its photos are here for the
                     // first time → at least show the unit name so the
                     // recipient knows whose photos these are.
-                    lines.push(`${u.unit}:`);
+                    unitBlocks.push(`${u.unit}:`);
                 }
             }
+            const text = unitBlocks.length > 0
+                ? `${contractor}\n${unitBlocks.join('\n\n')}`
+                : contractor;
 
             groups.push({
                 groupLabel,
                 planIdx,
-                text: lines.join('\n').trim(),
+                text,
                 files: partItems.map(it => it.file),
                 photoData: partItems.map(it => it.photo),
                 partIndex: partIdx,
