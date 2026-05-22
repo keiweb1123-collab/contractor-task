@@ -83,7 +83,7 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
-            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v74</div>
+            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v75</div>
         </header>
 
         <!-- Diagnostic block: populated by renderShareDiag() when a share fails. Includes a copy button. -->
@@ -236,6 +236,8 @@
                                 Floor Tile</button>
                             <button class="task-btn" onclick="openTaskOption('Wall tile', 'wall_tile_targets')">🧱
                                 Wall Tile</button>
+                            <button class="task-btn" onclick="addTaskDirect('Stair tiles installation')">🪜
+                                Stair Tiles</button>
                             <button class="task-btn" onclick="openTaskOption('Shadowline installation', 'floor')">📏
                                 Shadowline</button>
                             <button class="task-btn" onclick="openTaskOption('Painting', 'painting_type')">🎨
@@ -286,6 +288,15 @@
                                 Window (YKK)</button>
                             <button class="task-btn" onclick="openTaskOption('Pool', 'pool_targets')">🏊 Pool</button>
                             <button class="task-btn" onclick="addTaskDirect('AC Installation')">❄️ AC</button>
+                            <button class="task-btn" onclick="addTaskDirect('Rain gutter pipe Installation')">🌧️
+                                Rain Gutter</button>
+                            <button class="task-btn" onclick="addTaskDirect('Service ladder Installation')">🪜
+                                Service Ladder</button>
+                            <button class="task-btn"
+                                onclick="openTaskOption('Tempered glass Installation', 'tempered_glass_targets')">🪟
+                                Tempered Glass</button>
+                            <button class="task-btn" onclick="addTaskDirect('Stair railing installation')">🛡️
+                                Stair Railing</button>
                             <button class="task-btn" onclick="openTaskOption('Interior Work', 'floor')">🛋️
                                 Interior</button>
                         </div>
@@ -330,7 +341,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=74"></script>
+    <script src="app.js?v=75"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>

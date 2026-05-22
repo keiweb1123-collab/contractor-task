@@ -306,6 +306,7 @@ function openTaskOption(taskName, type) {
     else if (type === 'window_install_targets') options = ["Installation of window frame", "Installation of window"];
     else if (type === 'pool_targets') options = ["Installation of pool", "Casting concrete for pool", "Tile installation for pool area"];
     else if (type === 'dike_targets') options = ["Making railing dike", "Making balcony dike"];
+    else if (type === 'tempered_glass_targets') options = ["balcony", "void area", "entrance", "stairs"];
 
     title.textContent = `${taskName} for...`;
 
