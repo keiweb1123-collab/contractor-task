@@ -357,13 +357,14 @@ function openTaskOption(taskName, type) {
     else if (type === 'painting_type') options = ["Painting", "Primer painting"];
     else if (type === 'finishing_repair_targets') options = ["Repair Window opening", "Repair Door Opening", "Repair roof slope"];
     else if (type === 'screeding_targets') options = ["Screeding floor for SPC"];
-    else if (type === 'canopy_targets') options = ["Canopy frame installation", "Canopy tempered glass installation"];
+    else if (type === 'canopy_targets') options = ["Canopy frame installation", "Canopy tempered glass installation", "Canopy assembling"];
     else if (type === 'canopy_area_targets') options = ["Entrance area", "Balcony area"];
     else if (type === 'door_install_targets') options = ["Door frame installation", "Door installation"];
     else if (type === 'window_install_targets') options = ["Installation of window frame", "Installation of window"];
     else if (type === 'pool_targets') options = ["Installation of pool", "Casting concrete for pool", "Tile installation for pool area"];
     else if (type === 'dike_targets') options = ["Making railing dike", "Making balcony dike"];
     else if (type === 'tempered_glass_targets') options = ["balcony", "void area", "entrance", "stairs"];
+    else if (type === 'grouting_targets') options = ["tiles"];
 
     title.textContent = `${taskName} for...`;
 
@@ -441,6 +442,13 @@ function confirmModalSelection() {
 
     if (pendingTaskCategory === 'pool_targets') {
         addTaskDirect(joinedSelection);
+        closeModal();
+        return;
+    }
+
+    if (pendingTaskCategory === 'grouting_targets') {
+        // Produce e.g. "Grouting tiles" (no "for" connector) per user request.
+        addTaskDirect(`Grouting ${joinedSelection}`);
         closeModal();
         return;
     }

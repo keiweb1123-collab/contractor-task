@@ -83,7 +83,7 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
-            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v76</div>
+            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v77</div>
         </header>
 
         <!-- Diagnostic block: populated by renderShareDiag() when a share fails. Includes a copy button. -->
@@ -238,6 +238,8 @@
                                 Wall Tile</button>
                             <button class="task-btn" onclick="addTaskDirect('Stair tiles installation')">🪜
                                 Stair Tiles</button>
+                            <button class="task-btn" onclick="openTaskOption('Grouting', 'grouting_targets')">🧴
+                                Grouting</button>
                             <button class="task-btn" onclick="openTaskOption('Shadowline installation', 'floor')">📏
                                 Shadowline</button>
                             <button class="task-btn" onclick="openTaskOption('Painting', 'painting_type')">🎨
@@ -255,10 +257,10 @@
                                 Sanitary</button>
                             <button class="task-btn" onclick="openTaskOption('Dike', 'dike_targets')">🚧 Dike</button>
                             <button class="task-btn" onclick="addTaskDirect('Facade Installation')">🏢 Facade</button>
-                            <button class="task-btn" onclick="addTaskDirect('General Cleaning')">🧹 Cleaning</button>
 
                             <div class="separator">Roof & Others</div>
 
+                            <button class="task-btn" onclick="addTaskDirect('General Cleaning')">🧹 Cleaning</button>
                             <button class="task-btn" onclick="addTaskDirect('GRC Installation on RF')">🏗️ GRC</button>
                             <button class="task-btn" onclick="openTaskOption('Repair', 'repair_targets')">🩹
                                 Repair</button>
@@ -284,6 +286,8 @@
                                 Canopy</button>
                             <button class="task-btn" onclick="openTaskOption('Façade Steel Eaves', 'floor')">🏠 Façade
                                 Steel Eaves</button>
+                            <button class="task-btn" onclick="addTaskDirect('Steel eaves assembling')">🔧
+                                Steel Eaves Assembling</button>
                             <button class="task-btn" onclick="openTaskOption('Window', 'window_install_targets')">🪟
                                 Window (YKK)</button>
                             <button class="task-btn" onclick="openTaskOption('Pool', 'pool_targets')">🏊 Pool</button>
@@ -341,7 +345,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=76"></script>
+    <script src="app.js?v=77"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>
