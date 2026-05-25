@@ -1198,7 +1198,10 @@ function saveAndClose() {
     const contractor = getContractor(selectedUnit);
     if (!currentReport[contractor]) currentReport[contractor] = {};
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
-    currentReport[contractor][selectedUnit].tasks = currentTaskList.map(t => ({ text: t }));
+    // currentTaskList holds {text, noPrefix?} objects (v79+); spread them
+    // through. Previously this wrapped t inside another {text: t}, producing
+    // nested objects that rendered as [object Object] after a save.
+    currentReport[contractor][selectedUnit].tasks = currentTaskList.map(t => ({ ...t }));
     saveLocalData();
     // resetSelection routes through navBack — keeps history in sync so the
     // user can still back-gesture cleanly afterwards.
@@ -1377,6 +1380,12 @@ async function loadLocalData() {
             delete overtimeData["INITI INDAH"];
             migrated = true;
         }
+        // Repair tasks corrupted by the v79 saveAndClose bug.
+        if (migrateNestedTasks(currentReport)) migrated = true;
+        if (yesterdayReport && yesterdayReport.data
+            && migrateNestedTasks(yesterdayReport.data)) {
+            migrated = true;
+        }
         if (migrated) await saveLocalData();
     } catch (e) { console.error("IndexedDB load failed:", e); }
 }
@@ -1389,6 +1398,38 @@ function migrateContractorKey(report, oldKey, newKey) {
     report[newKey] = { ...oldEntry, ...newEntry };
     delete report[oldKey];
     return true;
+}
+
+// Repair tasks that got double-wrapped by the v79 saveAndClose bug:
+// some saves produced [{ text: { text: "...", noPrefix?: true } }, ...]
+// instead of the intended flat [{ text: "...", noPrefix?: true }, ...].
+// We detect those and flatten them so display/share code finds plain
+// strings under .text again.
+function migrateNestedTasks(report) {
+    if (!report) return false;
+    let migrated = false;
+    for (const contractor of Object.keys(report)) {
+        const cdata = report[contractor];
+        if (!cdata) continue;
+        for (const unit of Object.keys(cdata)) {
+            const unitData = cdata[unit];
+            if (!unitData || !Array.isArray(unitData.tasks)) continue;
+            unitData.tasks = unitData.tasks.map(t => {
+                if (t && typeof t.text === 'object' && t.text !== null
+                    && typeof t.text.text === 'string') {
+                    migrated = true;
+                    // Unwrap once; preserve any noPrefix flag carried on the
+                    // inner object.
+                    const inner = t.text;
+                    const fixed = { text: inner.text };
+                    if (inner.noPrefix) fixed.noPrefix = true;
+                    return fixed;
+                }
+                return t;
+            });
+        }
+    }
+    return migrated;
 }
 
 document.addEventListener("visibilitychange", () => {
