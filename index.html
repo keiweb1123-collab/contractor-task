@@ -83,7 +83,7 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
-            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v78</div>
+            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v79</div>
         </header>
 
         <!-- Diagnostic block: populated by renderShareDiag() when a share fails. Includes a copy button. -->
@@ -217,6 +217,12 @@
                                 onclick="openTaskOption('Lean concrete', 'lean_concrete_targets')">🪨
                                 Lean Concrete</button>
 
+                            <div class="separator">Casting concrete tomorrow</div>
+
+                            <button class="task-btn"
+                                onclick="openTaskOption('Casting concrete tomorrow', 'casting_tomorrow_targets')">🏗️
+                                Casting Concrete</button>
+
                             <div class="separator">MEP</div>
 
                             <button class="task-btn" onclick="openTaskOption('Installation of MEP work', 'floor')">⚡️
@@ -349,7 +355,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=78"></script>
+    <script src="app.js?v=79"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>

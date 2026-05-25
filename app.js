@@ -267,7 +267,11 @@ function openInput(unit, contractor) {
     selectedPhotoFloor = null;
 
     if (currentReport[contractor] && currentReport[contractor][unit]) {
-        currentTaskList = [...currentReport[contractor][unit].tasks.map(t => t.text)];
+        // Load tasks as full objects (preserve noPrefix etc.). Shallow copy
+        // so edits to currentTaskList don't mutate the stored entry until
+        // we explicitly syncCurrentUnitData.
+        currentTaskList = currentReport[contractor][unit].tasks.map(t => ({ ...t }));
+        sortTaskList();
     } else {
         currentTaskList = [];
     }
@@ -366,6 +370,7 @@ function openTaskOption(taskName, type) {
     else if (type === 'tempered_glass_targets') options = ["balcony", "void area", "entrance", "stairs"];
     else if (type === 'grouting_targets') options = ["tiles"];
     else if (type === 'facade_steel_eaves_targets') options = ["Façade Steel Eaves", "Steel eaves assembling"];
+    else if (type === 'casting_tomorrow_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Carport slope area", "Stairs"];
 
     title.textContent = `${taskName} for...`;
 
@@ -400,9 +405,16 @@ function formatList(arr) {
 }
 
 function confirmModalSelection() {
-    // If nothing selected, and it's a 2nd step (floor/area), we might allow adding as-is 
+    // If nothing selected, and it's a 2nd step (floor/area), we might allow adding as-is
     // especially for Waterproofing as requested.
     if (pendingOptions.size === 0) {
+        // For "casting concrete tomorrow" the floor is required (the sentence
+        // template includes "on FLOOR"). Close silently instead of adding a
+        // partial task.
+        if (pendingTaskCategory === 'casting_tomorrow_floor') {
+            closeModal();
+            return;
+        }
         if (pendingTaskCategory.includes('floor') || pendingTaskCategory.includes('area')) {
             addTaskDirect(pendingTaskName); // Add without suffix
             closeModal();
@@ -515,6 +527,36 @@ function confirmModalSelection() {
 
     if (pendingTaskCategory === 'finishing_repair_targets') {
         selectedArray.forEach(opt => addTaskDirect(opt));
+        closeModal();
+        return;
+    }
+
+    if (pendingTaskCategory === 'casting_tomorrow_targets') {
+        // Step 1: user picked target(s). Transition to floor selection.
+        pendingTaskName = joinedSelection; // e.g. "Slab" or "Slab and Beam"
+        pendingTaskCategory = 'casting_tomorrow_floor';
+        const grid = document.getElementById("modal-options");
+        const title = document.getElementById("modal-title");
+        grid.innerHTML = "";
+        title.textContent = `Cast ${pendingTaskName} on... (tomorrow)`;
+        ["GF", "1F", "2F", "3F", "RF"].forEach(f => {
+            const btn = document.createElement("button");
+            btn.className = "modal-option-btn";
+            btn.textContent = f;
+            btn.onclick = () => toggleOption(btn, f);
+            grid.appendChild(btn);
+        });
+        pendingOptions.clear();
+        return;
+    }
+
+    if (pendingTaskCategory === 'casting_tomorrow_floor') {
+        // Step 2: floor picked. Compose the full sentence with the contractor
+        // name and add it as a noPrefix task (no "-" when shared, always sorts
+        // to the bottom of the unit's task list).
+        const contractor = getContractor(selectedUnit);
+        const sentence = `${contractor} will cast concrete for ${pendingTaskName} on ${joinedSelection} tomorrow.`;
+        addTaskDirect(sentence, { noPrefix: true });
         closeModal();
         return;
     }
@@ -669,12 +711,27 @@ function closeModalUI() {
 // =============================================================
 // TASK LIST
 // =============================================================
-function addTaskDirect(text) {
-    currentTaskList.push(text);
+// currentTaskList holds { text, noPrefix? } objects (not raw strings).
+// noPrefix tasks render without the "•" bullet in the UI and without the
+// "-" prefix when shared. They always sort to the bottom of the list so
+// they don't get sandwiched between regular tasks added afterwards.
+function addTaskDirect(text, opts) {
+    const item = { text };
+    if (opts && opts.noPrefix) item.noPrefix = true;
+    currentTaskList.push(item);
+    sortTaskList();
     renderTaskList();
     updateTaskCount();
     syncCurrentUnitData();
     saveLocalData();
+}
+
+function sortTaskList() {
+    // Stable partition: regular tasks first (in insertion order),
+    // noPrefix tasks last (also in insertion order).
+    const regular = currentTaskList.filter(t => !t.noPrefix);
+    const trailing = currentTaskList.filter(t => !!t.noPrefix);
+    currentTaskList = regular.concat(trailing);
 }
 
 function copyYesterdayTasks() {
@@ -691,16 +748,19 @@ function copyYesterdayTasks() {
         return;
     }
 
-    const existing = new Set(currentTaskList);
+    const existing = new Set(currentTaskList.map(t => t.text));
     let added = 0;
     yTasks.forEach(t => {
         const text = (t && t.text) ? t.text : "";
         if (text && !existing.has(text)) {
-            currentTaskList.push(text);
+            const item = { text };
+            if (t.noPrefix) item.noPrefix = true;
+            currentTaskList.push(item);
             existing.add(text);
             added++;
         }
     });
+    sortTaskList();
 
     renderTaskList();
     updateTaskCount();
@@ -751,7 +811,8 @@ function syncCurrentUnitData() {
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
     const existingPhotos = currentReport[contractor][selectedUnit].photos;
     currentReport[contractor][selectedUnit] = {
-        tasks: currentTaskList.map(t => ({ text: t })),
+        // Save the full task objects (text + optional noPrefix).
+        tasks: currentTaskList.map(t => ({ ...t })),
         photos: existingPhotos
     };
 }
@@ -769,7 +830,9 @@ function renderTaskList() {
         const div = document.createElement("div");
         div.className = "task-item-removable";
         const span = document.createElement("span");
-        span.textContent = `• ${task}`;
+        // noPrefix tasks (e.g. "IADECCO will cast concrete for ...") render
+        // without the bullet, matching how they'll appear in the share text.
+        span.textContent = task.noPrefix ? task.text : `• ${task.text}`;
         const btn = document.createElement("button");
         btn.textContent = "×";
         btn.addEventListener("click", () => removeTask(index));
@@ -1670,7 +1733,10 @@ function renderYesterdaySection(container) {
             const tasks = (cdata[unit] && cdata[unit].tasks) ? cdata[unit].tasks : [];
             if (tasks.length > 0) {
                 body += `${unit}:\n`;
-                tasks.forEach(t => { body += `-${t.text}\n`; });
+                tasks.forEach(t => {
+                    const line = t.noPrefix ? t.text : `-${t.text}`;
+                    body += `${line}\n`;
+                });
                 body += `\n`;
             }
         }
@@ -1746,7 +1812,12 @@ async function generateContractorReportData(contractor, urlSink) {
         let taskText = "";
         if (unitData.tasks.length > 0) {
             taskText = `${unit}:\n`;
-            unitData.tasks.forEach(t => { taskText += `-${t.text}\n`; });
+            unitData.tasks.forEach(t => {
+                // noPrefix tasks (e.g. "IADECCO will cast concrete ... tomorrow.")
+                // are emitted as-is, without the leading "-".
+                const line = t.noPrefix ? t.text : `-${t.text}`;
+                taskText += `${line}\n`;
+            });
             body += taskText + `\n`;
         }
         unitBreakdown.push({ unit, taskText, photos: unitPhotos });
