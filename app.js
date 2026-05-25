@@ -373,6 +373,11 @@ function openTaskOption(taskName, type) {
     else if (type === 'casting_tomorrow_targets') options = ["Slab", "Beam", "Pile cap", "Retaining wall", "Column", "Carport slope area", "Stairs"];
 
     title.textContent = `${taskName} for...`;
+    // The casting-tomorrow target step needs a different title — the literal
+    // task name ("Casting concrete tomorrow") doesn't compose well with "for...".
+    if (type === 'casting_tomorrow_targets') {
+        title.textContent = "Tomorrow's casting:";
+    }
 
     options.forEach(opt => {
         const btn = document.createElement("button");
@@ -1400,13 +1405,20 @@ function migrateContractorKey(report, oldKey, newKey) {
     return true;
 }
 
-// Repair tasks that got double-wrapped by the v79 saveAndClose bug:
-// some saves produced [{ text: { text: "...", noPrefix?: true } }, ...]
-// instead of the intended flat [{ text: "...", noPrefix?: true }, ...].
-// We detect those and flatten them so display/share code finds plain
-// strings under .text again.
+// Repair tasks that got double- (or triple- …) wrapped by the v79
+// saveAndClose bug: some saves produced
+//   { text: { text: "...", noPrefix?: true } }
+// or even
+//   { text: { text: { text: "...", ... }, ... }, ... }
+// instead of the intended flat { text: "...", noPrefix?: true }.
+//
+// We unwrap as many layers as needed (capped at MAX_DEPTH to defend
+// against accidental cyclic references), preserving any noPrefix flag
+// seen at any layer. Healthy tasks ({ text: "string" }) skip the while
+// loop entirely, so this migration is a no-op on uncorrupted data.
 function migrateNestedTasks(report) {
     if (!report) return false;
+    const MAX_DEPTH = 10;
     let migrated = false;
     for (const contractor of Object.keys(report)) {
         const cdata = report[contractor];
@@ -1415,17 +1427,30 @@ function migrateNestedTasks(report) {
             const unitData = cdata[unit];
             if (!unitData || !Array.isArray(unitData.tasks)) continue;
             unitData.tasks = unitData.tasks.map(t => {
-                if (t && typeof t.text === 'object' && t.text !== null
-                    && typeof t.text.text === 'string') {
-                    migrated = true;
-                    // Unwrap once; preserve any noPrefix flag carried on the
-                    // inner object.
-                    const inner = t.text;
-                    const fixed = { text: inner.text };
-                    if (inner.noPrefix) fixed.noPrefix = true;
-                    return fixed;
+                if (!t || typeof t !== 'object') return t;
+                // Healthy entry → leave untouched.
+                if (typeof t.text === 'string') return t;
+                // Walk down nested wrappers until we find a string under
+                // `.text` or hit MAX_DEPTH. Carry the noPrefix flag if any
+                // layer had it set.
+                let cur = t;
+                let noPrefix = !!cur.noPrefix;
+                let depth = 0;
+                while (cur && typeof cur === 'object'
+                    && cur.text && typeof cur.text === 'object'
+                    && depth < MAX_DEPTH) {
+                    if (cur.text.noPrefix) noPrefix = true;
+                    cur = cur.text;
+                    depth++;
                 }
-                return t;
+                // If we didn't reach a string, give up safely: return the
+                // original entry unchanged so we don't silently destroy
+                // whatever the user typed.
+                if (!cur || typeof cur.text !== 'string') return t;
+                migrated = true;
+                const fixed = { text: cur.text };
+                if (noPrefix) fixed.noPrefix = true;
+                return fixed;
             });
         }
     }
