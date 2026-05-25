@@ -351,7 +351,7 @@ function openTaskOption(taskName, type) {
     else if (type === 'skim_coat_targets') options = ["GF", "1F", "2F", "3F", "RF", "Lift", "Outside wall", "Facade"];
     else if (type === 'waterproofing_targets') options = ["Roof", "Bathroom", "Pit Lift", "Balcony"];
     else if (type === 'opening_targets') options = ["Making door opening", "Making window opening", "Making lift opening"];
-    else if (type === 'repair_targets') options = ["Roof slope", "Door opening", "Window opening"];
+    else if (type === 'repair_targets') options = ["Roof slope", "Door opening", "Window opening", "Switch / light position"];
     else if (type === 'wall_tile_targets') options = ["Wall tile installation", "Facade"];
     else if (type === 'painting_targets') options = ["Wall", "Ceiling", "Parapet"];
     else if (type === 'painting_type') options = ["Painting", "Primer painting"];
@@ -365,6 +365,7 @@ function openTaskOption(taskName, type) {
     else if (type === 'dike_targets') options = ["Making railing dike", "Making balcony dike"];
     else if (type === 'tempered_glass_targets') options = ["balcony", "void area", "entrance", "stairs"];
     else if (type === 'grouting_targets') options = ["tiles"];
+    else if (type === 'facade_steel_eaves_targets') options = ["Façade Steel Eaves", "Steel eaves assembling"];
 
     title.textContent = `${taskName} for...`;
 
@@ -518,18 +519,56 @@ function confirmModalSelection() {
         return;
     }
 
-    if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets' || pendingTaskCategory === 'opening_targets' || pendingTaskCategory === 'repair_targets' || pendingTaskCategory === 'waterproofing_targets' || pendingTaskCategory === 'dike_targets') {
+    if (pendingTaskCategory === 'facade_steel_eaves_targets') {
+        // "Steel eaves assembling" is added directly (no floor selection).
+        // "Façade Steel Eaves" transitions to the floor-selection modal.
+        const wantsAssembling = pendingOptions.has('Steel eaves assembling');
+        const wantsInstall = pendingOptions.has('Façade Steel Eaves');
+        if (wantsAssembling) addTaskDirect('Steel eaves assembling');
+        if (wantsInstall) {
+            pendingTaskName = 'Façade Steel Eaves';
+            pendingTaskCategory = 'floor';
+            const grid = document.getElementById("modal-options");
+            const title = document.getElementById("modal-title");
+            grid.innerHTML = "";
+            title.textContent = `${pendingTaskName} on...`;
+            ["GF", "1F", "2F", "3F", "RF"].forEach(f => {
+                const btn = document.createElement("button");
+                btn.className = "modal-option-btn";
+                btn.textContent = f;
+                btn.onclick = () => toggleOption(btn, f);
+                grid.appendChild(btn);
+            });
+            pendingOptions.clear();
+            return;
+        }
+        closeModal();
+        return;
+    }
+
+    if (pendingTaskCategory === 'repair_targets') {
+        // Most repair options use the "Repairing X" prefix, but a few have
+        // their own canonical wording (e.g. "Switch / light position repair").
+        // Split them out so each selection gets the right phrasing.
+        const all = Array.from(pendingOptions);
+        const switchLight = all.includes('Switch / light position');
+        const others = all.filter(t => t !== 'Switch / light position');
+        if (switchLight) addTaskDirect('Switch / light position repair');
+        if (others.length > 0) addTaskDirect(`Repairing ${formatList(others)}`);
+        closeModal();
+        return;
+    }
+
+    if (pendingTaskCategory === 'excavation_targets' || pendingTaskCategory === 'rebar_fab_targets' || pendingTaskCategory === 'lean_concrete_targets' || pendingTaskCategory === 'opening_targets' || pendingTaskCategory === 'waterproofing_targets' || pendingTaskCategory === 'dike_targets') {
         let prefix;
         if (pendingTaskCategory === 'lean_concrete_targets') prefix = 'Lean concrete for';
         else if (pendingTaskCategory === 'rebar_fab_targets') prefix = 'Rebar fabrication for';
         else if (pendingTaskCategory === 'opening_targets') prefix = '';
-        else if (pendingTaskCategory === 'repair_targets') prefix = '';
         else if (pendingTaskCategory === 'waterproofing_targets') prefix = 'Waterproofing for';
         else if (pendingTaskCategory === 'dike_targets') prefix = '';
         else prefix = `${pendingTaskName} for`;
 
         let finalStr = prefix ? `${prefix} ${joinedSelection}` : joinedSelection;
-        if (pendingTaskCategory === 'repair_targets') finalStr = `Repairing ${joinedSelection}`;
 
         if (pendingTaskCategory === 'waterproofing_targets') {
             pendingTaskName = finalStr;
