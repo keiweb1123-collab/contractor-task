@@ -29,6 +29,7 @@ let selectedUnit = null;
 let currentTaskList = [];
 let selectedPhotoFloor = null;
 let cameraStream = null;
+let cameraStarting = false; // synchronous in-flight guard so a double-tap can't start two streams
 let pendingOptions = new Set();
 let pendingTaskName = "";
 let pendingTaskCategory = "";
@@ -47,6 +48,10 @@ let overtimeData = {};  // { "IADECCO": "◯"|"×", "YAMATO": "◯"|"×", "INTI 
 // don't churn URLs (which would otherwise pile up or get prematurely revoked
 // by a concurrent render).
 const photoUrlCache = new Map();
+
+// Cache decoded Blobs for legacy inline data-URL photos (keyed by the data-URL
+// string) so report renders don't re-decode the same photo every time.
+const _stringBlobCache = new Map();
 
 async function getPhotoUrl(photoId) {
     const cached = photoUrlCache.get(photoId);
@@ -67,7 +72,9 @@ async function getPhotoUrl(photoId) {
     // payload later without async work in the click handler. We do NOT await
     // this — render proceeds with the original blob immediately.
     resizeBlobForShare(blob, 1024).then(small => {
-        entry.shareBlob = small;
+        // Skip if this photo was evicted/replaced while the resize was running,
+        // so we don't write onto a detached cache entry (wasted work).
+        if (photoUrlCache.get(photoId) === entry) entry.shareBlob = small;
     }).catch(e => {
         console.warn('share resize failed; will use original blob:', e);
     });
@@ -132,6 +139,22 @@ function clearPhotoUrlCache() {
     photoUrlCache.clear();
 }
 
+// Synchronously decode a data: URL into a Blob. Used for legacy inline photos —
+// the previous code fetched the URL and swallowed failures, which could silently
+// drop a photo from shares. Decoding directly is reliable and fetch-free.
+function dataURLToBlob(dataUrl) {
+    const comma = dataUrl.indexOf(',');
+    if (comma < 0) throw new Error('malformed data URL');
+    const header = dataUrl.slice(0, comma);
+    const body = dataUrl.slice(comma + 1);
+    const mimeMatch = header.match(/^data:([^;,]+)/);
+    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const binary = /;base64/i.test(header) ? atob(body) : decodeURIComponent(body);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+}
+
 function getDateKey(d) {
     d = d || new Date();
     const y = d.getFullYear();
@@ -177,6 +200,10 @@ async function clearAllStoredImages() {
 // INIT
 // =============================================================
 document.addEventListener("DOMContentLoaded", async () => {
+    // Pin the initial history entry at depth 0 so the back-gesture math has a
+    // stable base. (Forward navigation after fully closing overlays is not
+    // re-opened — the app simply stays on the grid, which is harmless.)
+    try { history.replaceState({ depth: 0 }, '', ''); } catch (_) { }
     await loadLocalData();
     initGrid();
     renderAllReports();
@@ -311,6 +338,15 @@ function closeInputUI() {
     // layer was still on top, popstate already popped it first.
     if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
     document.getElementById("camera-overlay").classList.add("hidden");
+    // Reset camera session state so the next unit opens cleanly (rear lens, no
+    // wide, flash off) and re-detects devices instead of reusing stale indices.
+    cameraStarting = false;
+    currentFacingMode = "environment";
+    isWideActive = false;
+    isFlashOn = false;
+    cameraDevices = [];
+    normalCameraIndex = -1;
+    wideCameraIndex = -1;
     renderAllReports();
 }
 
@@ -897,7 +933,12 @@ async function toggleFlash() {
 }
 
 async function startCamera() {
-    if (cameraStream) return;
+    // `cameraStarting` is a synchronous flag (set before the awaited getUserMedia)
+    // so a rapid second tap — or racing the first-use permission prompt — can't
+    // start a second stream that would leak (camera LED stuck on) and double-push
+    // the nav entry.
+    if (cameraStream || cameraStarting) return;
+    cameraStarting = true;
 
     // Non-iOS: start orientation listener immediately (only if we need it, but screen.orientation handles most)
     // Removed the global window listener for 'deviceorientation' to rely on system defaults.
@@ -927,7 +968,10 @@ async function startCamera() {
 
         checkFlashCapability();
 
-        if (cameraDevices.length === 0) {
+        // Re-enumerate if we have no devices yet OR the cached list has no labels
+        // (labels are often empty until camera permission is granted, which would
+        // otherwise hide the 0.5x ultrawide button permanently).
+        if (cameraDevices.length === 0 || cameraDevices.every(d => !d.label)) {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
             populateCameraSelect();
@@ -953,6 +997,8 @@ async function startCamera() {
     } catch (err) {
         console.error(err);
         alert("Camera Error: " + err.message);
+    } finally {
+        cameraStarting = false;
     }
 }
 
@@ -1008,6 +1054,13 @@ async function switchCameraFace() {
         if (currentFacingMode === "environment") {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
+            // Recompute BOTH lens indices off the freshly-enumerated list. Enumerate
+            // order isn't guaranteed stable, so a stale normalCameraIndex would make
+            // the "1x" toggle return to the wrong lens (or undefined).
+            const activeTrack = cameraStream.getVideoTracks()[0];
+            const curId = (activeTrack && activeTrack.getSettings) ? activeTrack.getSettings().deviceId : null;
+            const ni = cameraDevices.findIndex(d => d.deviceId === curId);
+            if (ni >= 0) normalCameraIndex = ni;
             wideCameraIndex = cameraDevices.findIndex(d => /0\.5|ultra|wide/i.test(d.label));
             if (wideCameraIndex >= 0) { btnWide.classList.remove("hidden"); btnWide.textContent = "0.5x"; isWideActive = false; }
         }
@@ -1082,21 +1135,30 @@ function stopCamera() {
 function capturePhoto() {
     const video = document.getElementById("camera-stream");
     if (!cameraStream) return;
+    // Snapshot unit + floor synchronously at shutter time.
+    const includeFloor = document.getElementById("watermark-floor-check").checked;
+    const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
     // Live camera frames get the subtle camera filter; everything else
     // (sizing, watermark, compression, saving) is shared with the file path.
-    renderAndSavePhoto(video, video.videoWidth, video.videoHeight, true);
+    renderAndSavePhoto(video, video.videoWidth, video.videoHeight, true, selectedUnit, floorText);
+    // Stop the stream synchronously so a rapid second shutter tap can't capture
+    // another frame (and fire a second navBack) during the async popstate window.
+    // closeCameraOverlay still routes through navBack to keep history in sync.
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
     closeCameraOverlay();
 }
 
 // Shared image pipeline for BOTH the camera capture and the
-// "choose from gallery/file" path. Draws the source (a live <video> frame or a
-// decoded <img>) onto the work canvas, downscales it, applies the exact same
-// watermark (date / unit / optional floor) and saves a compressed JPEG. Routing
-// both inputs through one function guarantees file-picked photos are
-// watermarked, sized and stored identically to captured ones.
-function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter) {
+// "choose from gallery/file" path. Draws the source (a live <video> frame, a
+// decoded <img>, or an ImageBitmap) onto the work canvas, downscales it, applies
+// the exact same watermark (date / unit / optional floor) and saves a
+// compressed JPEG. The target unit + floor are passed in explicitly (snapshotted
+// by the caller) so a photo is never mis-attributed if the user navigates away
+// or changes the floor chip while an async decode is still running.
+// Returns true on success, false if rendering/encoding failed.
+function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter, targetUnit, floorText) {
     const canvas = document.getElementById("camera-canvas");
-    if (!srcW || !srcH) return;
+    if (!srcW || !srcH) return false;
 
     // Cap output at 1024 px wide. On a phone screen (typically 3–4× DPR
     // for the relevant viewport), 1024 px is indistinguishable from 1280 px,
@@ -1112,25 +1174,30 @@ function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter) {
         targetH = Math.round(targetH * scale);
     }
 
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext("2d");
+    try {
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext("2d");
 
-    ctx.save();
-    if (applyCameraFilter) ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
+        ctx.save();
+        if (applyCameraFilter) ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
 
-    ctx.drawImage(source, 0, 0, targetW, targetH);
+        ctx.drawImage(source, 0, 0, targetW, targetH);
 
-    ctx.restore();
-    ctx.filter = "none";
+        ctx.restore();
+        ctx.filter = "none";
 
-    const includeFloor = document.getElementById("watermark-floor-check").checked;
-    const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
-    addWatermark(ctx, canvas, selectedUnit, floorText);
+        addWatermark(ctx, canvas, targetUnit, floorText || "");
 
-    // Compress more to ensure sharing many photos at once doesn't crash the OS intent
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
-    savePhoto(dataUrl);
+        // Compress more to ensure sharing many photos at once doesn't crash the OS intent
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        if (!dataUrl || dataUrl.length < 100) throw new Error("empty canvas output");
+        savePhoto(dataUrl, targetUnit);
+        return true;
+    } catch (e) {
+        console.error("Photo render failed:", e);
+        return false;
+    }
 }
 
 // "Gallery" button → open the OS file/gallery picker. The hidden
@@ -1141,31 +1208,78 @@ function openPhotoFilePicker() {
     if (input) input.click();
 }
 
+// Show/hide the gallery "Processing…" state and disable the source buttons so
+// the UI doesn't look frozen (or accept a second pick) while images decode.
+function setPhotoBusy(busy, count) {
+    const cam = document.getElementById("start-camera-btn");
+    const gal = document.getElementById("choose-file-btn");
+    const status = document.getElementById("photo-busy");
+    if (cam) cam.disabled = busy;
+    if (gal) gal.disabled = busy;
+    if (status) {
+        status.textContent = busy ? `Processing ${count} photo${count > 1 ? 's' : ''}…` : "";
+        status.style.display = busy ? "block" : "none";
+    }
+}
+
+// Decode a picked file into a correctly-oriented source for drawImage.
+// Prefers createImageBitmap with imageOrientation:'from-image' so EXIF-rotated
+// phone photos come out upright with matching width/height; falls back to an
+// <img> decode on browsers without that option. Returns { source, w, h, close }.
+async function decodeImageOriented(file) {
+    if (typeof createImageBitmap === 'function') {
+        try {
+            const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+            return { source: bmp, w: bmp.width, h: bmp.height, close: () => { try { bmp.close(); } catch (_) { } } };
+        } catch (_) { /* fall through to <img> decode */ }
+    }
+    return await new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(url); resolve({ source: img, w: img.naturalWidth, h: img.naturalHeight, close: () => { } }); };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
+        img.src = url;
+    });
+}
+
 // Handle one or more images chosen from the gallery / file system. Each is
-// decoded into an <img> and pushed through renderAndSavePhoto — the same
-// pipeline as a camera shot — so the date/unit/floor watermark is applied
-// identically. Selecting multiple images at once is supported.
-function handlePhotoFiles(input) {
+// decoded and pushed through renderAndSavePhoto — the same pipeline as a camera
+// shot — so the date/unit/floor watermark is applied identically. Files are
+// processed sequentially (one decode in memory at a time) to bound peak memory,
+// the target unit/floor are snapshotted up front, and any files that can't be
+// decoded (e.g. HEIC on browsers without HEIC support) are reported to the user.
+async function handlePhotoFiles(input) {
     const files = Array.from(input.files || []);
     // Clear the value immediately so re-picking the SAME file still fires
     // `change` (browsers suppress it otherwise).
     input.value = "";
     if (!files.length || !selectedUnit) return;
 
-    files.forEach(file => {
-        if (!file.type || !file.type.startsWith("image/")) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                renderAndSavePhoto(img, img.naturalWidth, img.naturalHeight, false);
-            };
-            img.onerror = () => console.warn("Could not decode selected image:", file.name);
-            img.src = e.target.result;
-        };
-        reader.onerror = () => console.warn("Could not read selected file:", file.name);
-        reader.readAsDataURL(file);
-    });
+    // Snapshot the destination ONCE, synchronously, so the whole batch is
+    // attributed to the unit/floor that was open when the user picked.
+    const targetUnit = selectedUnit;
+    const includeFloor = document.getElementById("watermark-floor-check").checked;
+    const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
+
+    setPhotoBusy(true, files.length);
+    let ok = 0, failed = 0;
+    for (const file of files) {
+        if (!file.type || !file.type.startsWith("image/")) { failed++; continue; }
+        try {
+            const decoded = await decodeImageOriented(file);
+            const drawn = renderAndSavePhoto(decoded.source, decoded.w, decoded.h, false, targetUnit, floorText);
+            decoded.close();
+            if (drawn) ok++; else failed++;
+        } catch (e) {
+            console.warn("Could not open selected image:", file.name, e);
+            failed++;
+        }
+    }
+    setPhotoBusy(false);
+
+    if (failed > 0) {
+        alert(`${ok} photo(s) added.\n${failed} file(s) could not be opened — they may be an unsupported format (e.g. HEIC) or corrupt. Tip: set your phone camera to capture JPEG ("Most Compatible").`);
+    }
 }
 
 function addWatermark(ctx, canvas, unitText, floorText) {
@@ -1245,7 +1359,11 @@ async function deleteImageFromDB(id) {
 }
 
 function saveAndClose() {
+    // Guard against a null / unmapped unit (mirrors savePhoto) so we never
+    // create a phantom currentReport['Unassigned']['null'] entry.
+    if (!selectedUnit) { resetSelection(); return; }
     const contractor = getContractor(selectedUnit);
+    if (contractor === "Unassigned") { resetSelection(); return; }
     if (!currentReport[contractor]) currentReport[contractor] = {};
     if (!currentReport[contractor][selectedUnit]) currentReport[contractor][selectedUnit] = { tasks: [], photos: [] };
     // currentTaskList holds {text, noPrefix?} objects (v79+); spread them
@@ -1259,9 +1377,14 @@ function saveAndClose() {
 }
 
 function naturalSort(a, b) {
-    const numA = parseInt(a.replace(/\D/g, '')) || 0;
-    const numB = parseInt(b.replace(/\D/g, '')) || 0;
-    if (numA === numB) return a.localeCompare(b);
+    // Use only the FIRST digit run as the numeric key (not every digit run
+    // concatenated), so keys with digits in two positions sort by their primary
+    // number rather than a misleading concatenation.
+    const ma = String(a).match(/\d+/);
+    const mb = String(b).match(/\d+/);
+    const numA = ma ? parseInt(ma[0], 10) : 0;
+    const numB = mb ? parseInt(mb[0], 10) : 0;
+    if (numA === numB) return String(a).localeCompare(String(b));
     return numA - numB;
 }
 
@@ -1410,6 +1533,10 @@ async function loadLocalData() {
             currentReport = {};
             yesterdayReport = yRec;
             overtimeData = result.overtime || {};
+            // currentReport was discarded but a malformed/older payload may have
+            // left image blobs in IMG_STORE that no db_ref now references. Reclaim
+            // them so they don't permanently consume IndexedDB quota.
+            await clearAllStoredImages();
         }
 
         // Migration: unify contractor key "INITI INDAH" → "INTI INDAH"
@@ -1513,12 +1640,12 @@ window.addEventListener("beforeunload", () => {
     saveLocalData();
 });
 
-function savePhoto(dataUrl) {
-    // Snapshot the target unit at capture time. If the user closes the input
-    // section before the async save completes, `selectedUnit` would be
-    // null, which previously made `getContractor(null)` fall through to
-    // "Unassigned" and silently create a phantom contractor entry.
-    const targetUnit = selectedUnit;
+function savePhoto(dataUrl, targetUnit) {
+    // The target unit is snapshotted by the caller (capturePhoto / handlePhotoFiles)
+    // BEFORE any async decode, so a photo is attributed to the unit that was open
+    // when it was taken/picked — not whatever is selected when the save lands.
+    // Fall back to the live selection for any legacy caller that omits it.
+    if (targetUnit === undefined) targetUnit = selectedUnit;
     if (!targetUnit) {
         console.warn("savePhoto called with no selected unit — discarding capture.");
         return;
@@ -1551,7 +1678,12 @@ function savePhoto(dataUrl) {
     })();
 }
 
+let _previewGeneration = 0;
 async function renderPhotoPreview() {
+    // Generation guard: if a newer render starts while this one is awaiting a
+    // photo URL, abandon this one so concurrent runs can't both append into the
+    // gallery (which would duplicate thumbnails). Mirrors renderAllReports.
+    const myGen = ++_previewGeneration;
     const gallery = document.getElementById("preview-gallery");
     gallery.innerHTML = "";
     const contractor = getContractor(selectedUnit);
@@ -1561,10 +1693,13 @@ async function renderPhotoPreview() {
     for (let i = 0; i < photos.length; i++) {
         const item = photos[i];
         let src = "";
+        let photoId = null;
         if (typeof item === 'string') src = item;
         else if (item.type === 'db_ref') {
             const entry = await getPhotoUrl(item.id);
+            if (myGen !== _previewGeneration) return; // a newer render superseded us
             if (entry) src = entry.url;
+            photoId = item.id;
         }
         if (!src) continue;
 
@@ -1572,15 +1707,34 @@ async function renderPhotoPreview() {
         wrapper.style.cssText = "position:relative; display:inline-block;";
         const img = document.createElement("img");
         img.src = src;
+        img.alt = `Photo for ${selectedUnit}`;
         img.className = "preview-img";
         const delBtn = document.createElement("button");
+        delBtn.type = "button";
         delBtn.textContent = "×";
-        delBtn.style.cssText = "position:absolute; top:2px; right:2px; background:rgba(0,0,0,0.7); color:white; border:none; border-radius:50%; width:24px; height:24px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1;";
-        delBtn.onclick = () => removePhoto(i);
+        delBtn.setAttribute("aria-label", "Remove photo");
+        // 34px hit target (was 24px) for an easier tap; delete is resolved by
+        // photo id (not array index) so it stays correct after other deletions.
+        delBtn.style.cssText = "position:absolute; top:4px; right:4px; background:rgba(0,0,0,0.7); color:white; border:none; border-radius:50%; width:34px; height:34px; font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1;";
+        delBtn.onclick = () => removePhotoById(photoId, item);
         wrapper.appendChild(img);
         wrapper.appendChild(delBtn);
         gallery.appendChild(wrapper);
     }
+}
+
+// Remove a preview photo identified by its db_ref id (or, for legacy inline
+// photos, the item reference). Resolving the index at click time keeps deletes
+// correct even after earlier deletions reindexed the array.
+function removePhotoById(photoId, fallbackItem) {
+    const contractor = getContractor(selectedUnit);
+    const arr = currentReport[contractor] && currentReport[contractor][selectedUnit]
+        && currentReport[contractor][selectedUnit].photos;
+    if (!arr) return;
+    let idx = -1;
+    if (photoId) idx = arr.findIndex(p => p && p.type === 'db_ref' && p.id === photoId);
+    if (idx < 0) idx = arr.indexOf(fallbackItem);
+    if (idx >= 0) removePhoto(idx);
 }
 
 // =============================================================
@@ -1614,7 +1768,7 @@ async function renderAllReports() {
     const activeContractors = priorityContractorSort(Object.keys(currentReport));
 
     if (activeContractors.length === 0) {
-        container.innerHTML = `<p style="text-align:center; color:#94a3b8; margin-top:20px;">No reports yet.</p>`;
+        container.innerHTML = `<p style="text-align:center; color:#6b7280; margin-top:20px;">No reports yet.</p>`;
     } else {
         // Print header (only shown when printing)
         const printHdr = document.createElement("div");
@@ -1648,10 +1802,12 @@ async function renderAllReports() {
             const dateStr = getDateKey().replace(/-/g, '');
             let imagesHtml = `<div class="preview-gallery">`;
             if (photoData) {
-                photoData.forEach((item, idx) => {
+                const perUnit = {}; // number each unit's photos from 1
+                photoData.forEach((item) => {
                     if (!item.url) return; // guard: never emit <img src=""> if a photo failed to load
-                    const filename = `${dateStr}_${item.unit}_${idx + 1}.jpg`;
-                    imagesHtml += `<a href="${item.url}" download="${filename}"><img src="${item.url}" class="preview-img"></a>`;
+                    perUnit[item.unit] = (perUnit[item.unit] || 0) + 1;
+                    const filename = `${dateStr}_${item.unit}_${perUnit[item.unit]}.jpg`;
+                    imagesHtml += `<a href="${item.url}" download="${filename}"><img src="${item.url}" alt="Site photo ${escapeHtml(item.unit)}" class="preview-img"></a>`;
                 });
             }
             imagesHtml += `</div>`;
@@ -1891,10 +2047,16 @@ async function generateContractorReportData(contractor, urlSink) {
             let fileBlob = null;
             if (typeof photo === 'string') {
                 url = photo;
-                try {
-                    fileBlob = await (await fetch(url)).blob();
-                } catch(e) {
-                    console.warn('Legacy string-photo blob fetch failed:', e);
+                // Decode once and cache, instead of re-fetching/re-decoding the
+                // same data URL on every render.
+                fileBlob = _stringBlobCache.get(photo) || null;
+                if (!fileBlob) {
+                    try {
+                        fileBlob = dataURLToBlob(photo);
+                        _stringBlobCache.set(photo, fileBlob);
+                    } catch (e) {
+                        console.warn('Legacy string-photo decode failed:', e);
+                    }
                 }
             }
             let cacheEntry = null;
@@ -1945,10 +2107,9 @@ async function generateContractorReportData(contractor, urlSink) {
 // when the actual share() will reject. On Chrome Android PWA the failure
 // mode is NotAllowedError ("Permission denied"), and user testing
 // pinpointed the threshold to file COUNT: 10 photos succeed, 11+ fail
-// — total bytes are not the dominant constraint. We chunk by both anyway
-// so a future device with stricter byte limits still degrades gracefully.
+// — total bytes are not the dominant constraint, so we sub-chunk purely by
+// file count (MAX_FILES_PER_SHARE).
 const MAX_FILES_PER_SHARE = 10;
-const MAX_BYTES_PER_SHARE = 4 * 1024 * 1024;
 
 // Hard-coded share groupings per contractor, chosen by the user.
 // Each contractor's units are split into the explicit groups below — the
@@ -1970,7 +2131,6 @@ const SHARE_GROUPS_PER_CONTRACTOR = {
 };
 
 function chunkUnitsForShare(contractor, unitBreakdown) {
-    const dateStr = getDateKey().replace(/-/g, '');
     const groups = [];
 
     // Build a lookup: unit name → its unitBreakdown entry.
@@ -2001,13 +2161,14 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
                 continue;
             }
             for (let i = 0; i < photosWithBlob.length; i++) {
-                const p = photosWithBlob[i];
-                const src = p.shareBlob || p.blob;
+                // Files are built later (at share time) in shareToWhatsApp from
+                // photoData, so we don't pre-build (and double-build) them here —
+                // doing so eagerly also captured full-size blobs before the
+                // background share-resize finished.
                 items.push({
                     unit: ub.unit,
                     taskText: ub.taskText,
-                    file: new File([src], `${dateStr}_${ub.unit}_${i + 1}.jpg`, { type: 'image/jpeg' }),
-                    photo: p,
+                    photo: photosWithBlob[i],
                 });
             }
         }
@@ -2094,7 +2255,7 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
                 groupLabel,
                 planIdx,
                 text,
-                files: partItems.map(it => it.file),
+                files: [],
                 photoData: partItems.map(it => it.photo),
                 partIndex: partIdx,
                 partTotal: totalParts
@@ -2148,10 +2309,13 @@ function shareToWhatsApp(text, photoData) {
     const files = [];
     if (photoData && photoData.length > 0) {
         const dateStr = getDateKey().replace(/-/g, '');
+        const perUnit = {}; // number each unit's photos from 1 (not the running total)
         for (let i = 0; i < photoData.length; i++) {
             const sourceBlob = photoData[i].shareBlob || photoData[i].blob;
             if (sourceBlob) {
-                const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
+                const unit = photoData[i].unit;
+                perUnit[unit] = (perUnit[unit] || 0) + 1;
+                const filename = `${dateStr}_${unit}_${perUnit[unit]}.jpg`;
                 files.push(new File([sourceBlob], filename, { type: 'image/jpeg' }));
             }
         }
@@ -2322,7 +2486,11 @@ function exportCSV() {
         return;
     }
     const csv = rows.map(r => r.map(cell => {
-        const s = String(cell);
+        let s = String(cell);
+        // Neutralize spreadsheet formula injection: a cell beginning with a
+        // formula trigger is prefixed with an apostrophe so Excel/Sheets treat
+        // it as literal text instead of evaluating it.
+        if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
         return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     }).join(",")).join("\r\n");
     // Prepend BOM so Excel reads UTF-8 correctly
@@ -2352,11 +2520,15 @@ async function saveAllPhotos(photoData) {
 
     // Always use direct download — never navigator.share (which opens WhatsApp)
     const tempUrls = [];
+    const perUnit = {}; // number each unit's photos from 1
     for (let i = 0; i < photoData.length; i++) {
         try {
-            const res = await fetch(photoData[i].url);
-            const blob = await res.blob();
-            const filename = `${dateStr}_${photoData[i].unit}_${i + 1}.jpg`;
+            // Use the already-decoded blob from the cache directly; only fall
+            // back to re-fetching the Object URL if it's somehow absent.
+            const blob = photoData[i].blob || await (await fetch(photoData[i].url)).blob();
+            const unit = photoData[i].unit;
+            perUnit[unit] = (perUnit[unit] || 0) + 1;
+            const filename = `${dateStr}_${unit}_${perUnit[unit]}.jpg`;
             const url = URL.createObjectURL(blob);
             tempUrls.push(url);
             const a = document.createElement('a');

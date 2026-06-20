@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#ffffff">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -14,7 +14,7 @@
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
 
-    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="style.css?v=5">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
         rel="stylesheet">
     <style>
@@ -83,7 +83,7 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
-            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v82</div>
+            <div style="color:#6b7280; font-size:0.7rem; margin-top:4px;">app v83</div>
         </header>
 
         <!-- Diagnostic block: populated by renderShareDiag() when a share fails. Includes a copy button. -->
@@ -100,7 +100,7 @@
                 <div>
                     <h2 id="selected-unit-display" style="font-weight:900; font-size:1.4rem;">Unit 1</h2>
                 </div>
-                <button class="close-btn" onclick="resetSelection()">✕</button>
+                <button class="close-btn" type="button" aria-label="Close" onclick="resetSelection()">✕</button>
             </div>
 
             <!-- Tab Switching -->
@@ -117,7 +117,7 @@
                 <div id="photo-tab" class="tab-content">
                     <div class="form-group">
                         <span class="label">Watermark Options</span>
-                        <p style="font-size:0.75rem; color:#9ca3af; margin:-2px 0 8px;">Watermark (date / unit / floor) applies to both Camera and Gallery</p>
+                        <p style="font-size:0.75rem; color:#6b7280; margin:-2px 0 8px;">Watermark (date / unit / floor) applies to both Camera and Gallery</p>
                         <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
                             <input type="checkbox" id="watermark-floor-check" style="width:20px; height:20px;">
                             <label for="watermark-floor-check" style="font-weight:600; color:#374151;">Include Floor
@@ -150,6 +150,8 @@
                         </div>
                         <input type="file" id="photo-file-input" accept="image/*" multiple class="hidden"
                             onchange="handlePhotoFiles(this)">
+                        <p id="photo-busy" role="status" aria-live="polite"
+                            style="display:none; text-align:center; color:#4f46e5; font-weight:700; font-size:0.85rem; margin-top:10px;"></p>
                     </div>
 
                     <!-- Preview Gallery -->
@@ -164,15 +166,15 @@
                     <canvas id="camera-canvas" class="hidden"></canvas>
 
                     <!-- Close Button (top-left) -->
-                    <button onclick="closeCameraOverlay()"
-                        style="position:absolute; top:16px; left:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:22px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">✕</button>
+                    <button onclick="closeCameraOverlay()" type="button" aria-label="Close camera"
+                        style="position:absolute; top:calc(16px + env(safe-area-inset-top)); left:calc(16px + env(safe-area-inset-left)); z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:22px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">✕</button>
 
                     <!-- Flash Toggle Button -->
-                    <button id="btn-flash-toggle" onclick="toggleFlash()" title="Toggle Flash"
-                        style="position:absolute; top:16px; right:16px; z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:20px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">⚡</button>
+                    <button id="btn-flash-toggle" onclick="toggleFlash()" type="button" title="Toggle Flash" aria-label="Toggle flash"
+                        style="position:absolute; top:calc(16px + env(safe-area-inset-top)); right:calc(16px + env(safe-area-inset-right)); z-index:5010; background:rgba(0,0,0,0.5); color:white; border:none; border-radius:50%; width:44px; height:44px; font-size:20px; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center;">⚡</button>
 
                     <!-- Camera Selection Dropdown -->
-                    <div style="position:absolute; top:70px; left:16px; z-index:5010;">
+                    <div style="position:absolute; top:calc(70px + env(safe-area-inset-top)); left:calc(16px + env(safe-area-inset-left)); z-index:5010;">
                         <select id="camera-select" onchange="manualSelectCamera()"
                             style="background:rgba(0,0,0,0.6); color:white; border:1px solid #666; padding:8px; border-radius:8px; font-size:14px; max-width:200px;">
                             <option value="">Auto Select</option>
@@ -183,13 +185,13 @@
                     <div class="camera-controls-bottom">
 
                         <!-- Front/Back Switch -->
-                        <button onclick="switchCameraFace()" class="camera-side-btn"
+                        <button onclick="switchCameraFace()" type="button" aria-label="Switch front/back camera" class="camera-side-btn"
                             style="background:rgba(255,255,255,0.2); backdrop-filter:blur(5px); border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; border:none; color:white; font-size:20px;">🔄</button>
 
-                        <button class="btn-shutter" onclick="capturePhoto()"></button>
+                        <button class="btn-shutter" type="button" aria-label="Take photo" onclick="capturePhoto()"></button>
 
                         <!-- Wide/Normal Toggle (hidden if not available) -->
-                        <button id="btn-wide-toggle" onclick="toggleWideMode()" class="camera-side-btn hidden"
+                        <button id="btn-wide-toggle" onclick="toggleWideMode()" type="button" aria-label="Toggle wide angle lens" class="camera-side-btn hidden"
                             style="background:rgba(255,255,255,0.2); backdrop-filter:blur(5px); border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; border:none; color:white; font-size:14px; font-weight:700;">1x</button>
                     </div>
                 </div>
@@ -368,7 +370,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=82"></script>
+    <script src="app.js?v=83"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>
