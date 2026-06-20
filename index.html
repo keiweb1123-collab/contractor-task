@@ -83,7 +83,7 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
-            <div style="color:#6b7280; font-size:0.7rem; margin-top:4px;">app v83</div>
+            <div style="color:#6b7280; font-size:0.7rem; margin-top:4px;">app v84</div>
         </header>
 
         <!-- Diagnostic block: populated by renderShareDiag() when a share fails. Includes a copy button. -->
@@ -160,7 +160,7 @@
 
                 <!-- FULLSCREEN CAMERA OVERLAY -->
                 <div id="camera-overlay" class="hidden"
-                    style="position:fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:5000; display:flex; flex-direction:column;">
+                    style="position:fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:5000; display:flex; flex-direction:column; touch-action:none; overflow:hidden;">
                     <video id="camera-stream" autoplay playsinline muted
                         style="flex:1; width:100%; height:100%; object-fit:contain;"></video>
                     <canvas id="camera-canvas" class="hidden"></canvas>
@@ -180,6 +180,10 @@
                             <option value="">Auto Select</option>
                         </select>
                     </div>
+
+                    <!-- Zoom level indicator (pinch the camera to zoom) -->
+                    <div id="camera-zoom-badge"
+                        style="position:absolute; top:calc(16px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); z-index:5010; background:rgba(0,0,0,0.5); color:white; padding:4px 12px; border-radius:99px; font-size:14px; font-weight:700; backdrop-filter:blur(5px);">1.0x</div>
 
                     <!-- Bottom Controls -->
                     <div class="camera-controls-bottom">
@@ -370,7 +374,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=83"></script>
+    <script src="app.js?v=84"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>

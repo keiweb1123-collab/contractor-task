@@ -40,6 +40,15 @@ let wideCameraIndex = -1;
 let isWideActive = false;
 let currentFacingMode = "environment";
 let isFlashOn = false;
+// Camera zoom. `camZoomSupported` means the active track exposes a real `zoom`
+// capability (most modern Android). When it doesn't (e.g. iOS Safari), we fall
+// back to digital zoom: scale the preview with CSS and centre-crop on capture.
+let camZoomSupported = false;
+let camZoomMin = 1, camZoomMax = 1, camZoomStep = 0.1, camZoomCurrent = 1, camZoomInitial = 1;
+let camDigitalZoom = 1;            // 1..CAM_DIGITAL_MAX when track zoom is unavailable
+const CAM_DIGITAL_MAX = 5;
+let _pinchStartDist = 0, _pinchStartZoom = 1;
+let _camZoomListenersBound = false;
 let yesterdayReport = null; // { date, data } — text-only snapshot
 let overtimeData = {};  // { "IADECCO": "◯"|"×", "YAMATO": "◯"|"×", "INTI INDAH": "◯"|"×" }
 
@@ -347,6 +356,11 @@ function closeInputUI() {
     cameraDevices = [];
     normalCameraIndex = -1;
     wideCameraIndex = -1;
+    camZoomSupported = false;
+    camDigitalZoom = 1;
+    camZoomCurrent = 1;
+    const camV = document.getElementById("camera-stream");
+    if (camV) camV.style.transform = "";
     renderAllReports();
 }
 
@@ -967,6 +981,7 @@ async function startCamera() {
         navPush('camera');
 
         checkFlashCapability();
+        initCameraZoom();
 
         // Re-enumerate if we have no devices yet OR the cached list has no labels
         // (labels are often empty until camera permission is granted, which would
@@ -1031,6 +1046,7 @@ async function manualSelectCamera() {
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
         checkFlashCapability();
+        initCameraZoom();
     } catch (err) {
         alert("Failed to switch: " + err.message);
     }
@@ -1051,6 +1067,7 @@ async function switchCameraFace() {
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
         checkFlashCapability();
+        initCameraZoom();
         if (currentFacingMode === "environment") {
             const devices = await navigator.mediaDevices.enumerateDevices();
             cameraDevices = devices.filter(d => d.kind === 'videoinput');
@@ -1070,6 +1087,7 @@ async function switchCameraFace() {
             const video = document.getElementById("camera-stream");
             video.srcObject = cameraStream;
             checkFlashCapability();
+        initCameraZoom();
         } catch (e) { alert("Camera Switch Failed: " + e.message); }
     }
 }
@@ -1092,6 +1110,7 @@ async function toggleWideMode() {
         const video = document.getElementById("camera-stream");
         video.srcObject = cameraStream;
         checkFlashCapability();
+        initCameraZoom();
         const btn = document.getElementById("btn-wide-toggle");
         btn.textContent = isWideActive ? "1x" : "0.5x";
     } catch (e) {
@@ -1119,6 +1138,10 @@ function closeCameraOverlay() {
 function closeCameraUI() {
     if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
     document.getElementById("camera-overlay").classList.add("hidden");
+    // Clear any digital-zoom transform so the preview starts at 1× next time.
+    const v = document.getElementById("camera-stream");
+    if (v) v.style.transform = "";
+    camDigitalZoom = 1; camZoomCurrent = 1;
 }
 
 // Legacy alias retained for callers (e.g. switchTab) that want to make sure
@@ -1132,15 +1155,129 @@ function stopCamera() {
     }
 }
 
+// =============================================================
+// CAMERA ZOOM (pinch-to-zoom that drives the actual camera, not the page)
+// =============================================================
+function getCameraTrack() {
+    return (cameraStream && cameraStream.getVideoTracks) ? cameraStream.getVideoTracks()[0] : null;
+}
+
+// Re-probe zoom support for the current track and reset zoom to 1×. Called after
+// every stream (re)acquisition (open, lens switch, device switch).
+function initCameraZoom() {
+    camZoomSupported = false;
+    camZoomCurrent = 1;
+    camDigitalZoom = 1;
+    const video = document.getElementById("camera-stream");
+    if (video) video.style.transform = "";       // clear any digital-zoom scale
+    const track = getCameraTrack();
+    if (track && track.getCapabilities) {
+        let caps = {};
+        try { caps = track.getCapabilities() || {}; } catch (_) { caps = {}; }
+        if (caps.zoom && typeof caps.zoom === "object" && caps.zoom.max > caps.zoom.min) {
+            camZoomSupported = true;
+            camZoomMin = caps.zoom.min;
+            camZoomMax = caps.zoom.max;
+            camZoomStep = caps.zoom.step || 0.1;
+            camZoomCurrent = camZoomMin;
+            try { const s = track.getSettings(); if (s && typeof s.zoom === "number") camZoomCurrent = s.zoom; } catch (_) { }
+        }
+    }
+    // Treat the zoom as it is when the camera opens as "1.0x" so the badge starts
+    // at 1.0x regardless of the device's reported min/initial zoom value.
+    camZoomInitial = camZoomCurrent || 1;
+    bindCameraZoomListeners();
+    updateZoomBadge();
+}
+
+function _touchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+}
+
+// Apply a pinch zoom by multiplying the zoom captured at pinch-start by `ratio`.
+function applyPinchZoom(ratio) {
+    if (camZoomSupported) {
+        let z = Math.max(camZoomMin, Math.min(camZoomMax, _pinchStartZoom * ratio));
+        camZoomCurrent = z;   // optimistic, for immediate badge feedback
+        const track = getCameraTrack();
+        if (track) {
+            track.applyConstraints({ advanced: [{ zoom: z }] }).then(() => {
+                // Reconcile with what the camera actually applied — some browsers
+                // clamp/round the requested zoom, so read it back from the track.
+                try { const s = track.getSettings(); if (s && typeof s.zoom === "number") { camZoomCurrent = s.zoom; updateZoomBadge(); } } catch (_) { }
+            }).catch(() => { });
+        }
+    } else {
+        let z = Math.max(1, Math.min(CAM_DIGITAL_MAX, _pinchStartZoom * ratio));
+        camDigitalZoom = z;
+        const video = document.getElementById("camera-stream");
+        if (video) { video.style.transformOrigin = "center center"; video.style.transform = `scale(${z})`; }
+    }
+    updateZoomBadge();
+}
+
+// Current zoom as a human "×" multiple (relative to the no-zoom baseline).
+function currentZoomFactor() {
+    if (camZoomSupported) return camZoomInitial > 0 ? (camZoomCurrent / camZoomInitial) : camZoomCurrent;
+    return camDigitalZoom;
+}
+
+function updateZoomBadge() {
+    const badge = document.getElementById("camera-zoom-badge");
+    if (!badge) return;
+    badge.textContent = `${currentZoomFactor().toFixed(1)}x`;
+}
+
+// Bind pinch + page-zoom-suppression listeners to the overlay ONCE. Inside the
+// camera overlay we never want the browser to zoom the *page* — pinches drive
+// the camera instead. (touch-action:none on the overlay handles Android; the
+// preventDefault handlers below also cover iOS Safari's gesture events.)
+function bindCameraZoomListeners() {
+    if (_camZoomListenersBound) return;
+    const overlay = document.getElementById("camera-overlay");
+    if (!overlay) return;
+    overlay.addEventListener("touchstart", (e) => {
+        if (e.touches.length === 2) {
+            e.preventDefault();
+            _pinchStartDist = _touchDistance(e.touches);
+            _pinchStartZoom = camZoomSupported ? camZoomCurrent : camDigitalZoom;
+        }
+    }, { passive: false });
+    overlay.addEventListener("touchmove", (e) => {
+        if (e.touches.length === 2) {
+            e.preventDefault();   // stop the page from pinch-zooming over the camera
+            if (_pinchStartDist > 0) applyPinchZoom(_touchDistance(e.touches) / _pinchStartDist);
+        }
+    }, { passive: false });
+    overlay.addEventListener("touchend", (e) => {
+        if (e.touches.length < 2) _pinchStartDist = 0;
+    }, { passive: false });
+    // iOS Safari pinch fires gesture* events; block them so the page can't zoom.
+    overlay.addEventListener("gesturestart", (e) => e.preventDefault());
+    overlay.addEventListener("gesturechange", (e) => e.preventDefault());
+    _camZoomListenersBound = true;
+}
+
 function capturePhoto() {
     const video = document.getElementById("camera-stream");
     if (!cameraStream) return;
     // Snapshot unit + floor synchronously at shutter time.
     const includeFloor = document.getElementById("watermark-floor-check").checked;
     const floorText = includeFloor && selectedPhotoFloor ? selectedPhotoFloor : "";
+    // If digital zoom is active (track zoom unsupported), centre-crop the frame
+    // so the saved photo matches the zoomed-in preview. Track-based zoom needs
+    // no crop — the stream already delivers zoomed frames.
+    let cropRect = null;
+    if (!camZoomSupported && camDigitalZoom > 1) {
+        const vw = video.videoWidth, vh = video.videoHeight, z = camDigitalZoom;
+        const sw = vw / z, sh = vh / z;
+        cropRect = { sx: (vw - sw) / 2, sy: (vh - sh) / 2, sw, sh };
+    }
     // Live camera frames get the subtle camera filter; everything else
     // (sizing, watermark, compression, saving) is shared with the file path.
-    renderAndSavePhoto(video, video.videoWidth, video.videoHeight, true, selectedUnit, floorText);
+    renderAndSavePhoto(video, video.videoWidth, video.videoHeight, true, selectedUnit, floorText, cropRect);
     // Stop the stream synchronously so a rapid second shutter tap can't capture
     // another frame (and fire a second navBack) during the async popstate window.
     // closeCameraOverlay still routes through navBack to keep history in sync.
@@ -1156,17 +1293,25 @@ function capturePhoto() {
 // by the caller) so a photo is never mis-attributed if the user navigates away
 // or changes the floor chip while an async decode is still running.
 // Returns true on success, false if rendering/encoding failed.
-function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter, targetUnit, floorText) {
+function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter, targetUnit, floorText, cropRect) {
     const canvas = document.getElementById("camera-canvas");
     if (!srcW || !srcH) return false;
+
+    // Optional source crop rectangle — used to bake in digital camera zoom on
+    // capture (the camera path centre-crops the frame). The gallery path passes
+    // no cropRect, so the full source is drawn (identical to before).
+    const sx = cropRect ? cropRect.sx : 0;
+    const sy = cropRect ? cropRect.sy : 0;
+    const sw = cropRect ? cropRect.sw : srcW;
+    const sh = cropRect ? cropRect.sh : srcH;
 
     // Cap output at 1024 px wide. On a phone screen (typically 3–4× DPR
     // for the relevant viewport), 1024 px is indistinguishable from 1280 px,
     // but the file is ~40 % smaller, which is what keeps many-photo shares
     // under the practical Web Share API payload limit on Android Chrome PWA.
     const maxWidth = 1024;
-    let targetW = srcW;
-    let targetH = srcH;
+    let targetW = sw;
+    let targetH = sh;
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -1182,7 +1327,7 @@ function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter, targetUnit, f
         ctx.save();
         if (applyCameraFilter) ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
 
-        ctx.drawImage(source, 0, 0, targetW, targetH);
+        ctx.drawImage(source, sx, sy, sw, sh, 0, 0, targetW, targetH);
 
         ctx.restore();
         ctx.filter = "none";
@@ -1978,9 +2123,12 @@ function openWhatsAppWithText(text) {
     document.body.removeChild(a);
 }
 
-async function shareOvertimeToWA() {
-    const text = generateOvertimeText();
-    openWhatsAppWithText(text);
+function shareOvertimeToWA() {
+    // Share via the SAME path as the daily report — the native share sheet
+    // (navigator.share) when available, deep-link fallback otherwise — instead
+    // of going straight to the whatsapp:// text deep link. Kept synchronous (no
+    // async/await) so the user gesture survives for navigator.share().
+    shareToWhatsApp(generateOvertimeText(), []);
 }
 
 function renderYesterdaySection(container) {
