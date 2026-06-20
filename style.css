@@ -349,6 +349,75 @@ canvas#camera-canvas {
     transform: scale(0.95);
 }
 
+/* Chip groups (e.g. the photo floor selector) — wrap cleanly with spacing so
+   they never collapse or overflow on narrow phones. */
+.chip-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.chip-group.small .chip {
+    padding: 8px 14px;
+    font-size: 0.85rem;
+}
+
+/* Photo source selector (Camera / Gallery) */
+.photo-source-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.photo-source-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    /* allow the grid track to shrink instead of overflowing on small screens */
+    padding: 18px 10px;
+    border: 2px solid #e5e7eb;
+    border-top-width: 4px;
+    border-radius: var(--radius-md);
+    background: white;
+    color: #1f2937;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.photo-source-btn.is-camera {
+    border-top-color: #6366f1;
+}
+
+.photo-source-btn.is-file {
+    border-top-color: #10b981;
+}
+
+.photo-source-btn:active {
+    transform: scale(0.97);
+    background: #f5f3ff;
+}
+
+.photo-source-btn .ps-icon {
+    font-size: 1.8rem;
+    line-height: 1;
+}
+
+.photo-source-btn .ps-label {
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.photo-source-btn .ps-sub {
+    font-size: 0.7rem;
+    color: #6b7280;
+    font-weight: 600;
+}
+
 /* Fix Preview Image Overflow */
 .preview-gallery {
     display: flex;

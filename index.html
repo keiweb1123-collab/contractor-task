@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8">
@@ -14,7 +14,7 @@
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
 
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=4">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
         rel="stylesheet">
     <style>
@@ -83,7 +83,7 @@
         <header>
             <h1>CONSTRUCTION LOG</h1>
             <p>One-Tap Daily Reporting</p>
-            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v81</div>
+            <div style="color:#9ca3af; font-size:0.7rem; margin-top:4px;">app v82</div>
         </header>
 
         <!-- Diagnostic block: populated by renderShareDiag() when a share fails. Includes a copy button. -->
@@ -106,7 +106,7 @@
             <!-- Tab Switching -->
             <div class="sticky-tabs">
                 <div class="tab-container">
-                    <button class="tab-btn active" onclick="switchTab('photo')">📷 Camera</button>
+                    <button class="tab-btn active" onclick="switchTab('photo')">📷 Photo</button>
                     <button class="tab-btn" onclick="switchTab('task')">📝 Tasks (<span
                             id="task-count">0</span>)</button>
                 </div>
@@ -117,6 +117,7 @@
                 <div id="photo-tab" class="tab-content">
                     <div class="form-group">
                         <span class="label">Watermark Options</span>
+                        <p style="font-size:0.75rem; color:#9ca3af; margin:-2px 0 8px;">Watermark (date / unit / floor) applies to both Camera and Gallery</p>
                         <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
                             <input type="checkbox" id="watermark-floor-check" style="width:20px; height:20px;">
                             <label for="watermark-floor-check" style="font-weight:600; color:#374151;">Include Floor
@@ -132,11 +133,23 @@
                         </div>
                     </div>
 
-                    <!-- Camera Start Button -->
-                    <div style="text-align:center; margin-bottom:16px;">
-                        <button id="start-camera-btn"
-                            style="background:white; color:#111; padding:12px 20px; border-radius:99px; font-weight:700; border:none; box-shadow:0 2px 8px rgba(0,0,0,0.1);"
-                            onclick="startCamera()">📷 Open Camera</button>
+                    <!-- Photo source: Camera OR Gallery/File. Watermark options above apply to both. -->
+                    <div class="form-group">
+                        <span class="label">Add Photo</span>
+                        <div class="photo-source-row">
+                            <button id="start-camera-btn" class="photo-source-btn is-camera" onclick="startCamera()">
+                                <span class="ps-icon">📷</span>
+                                <span class="ps-label">Camera</span>
+                                <span class="ps-sub">Take a photo</span>
+                            </button>
+                            <button id="choose-file-btn" class="photo-source-btn is-file" onclick="openPhotoFilePicker()">
+                                <span class="ps-icon">🖼️</span>
+                                <span class="ps-label">Gallery</span>
+                                <span class="ps-sub">Choose a photo</span>
+                            </button>
+                        </div>
+                        <input type="file" id="photo-file-input" accept="image/*" multiple class="hidden"
+                            onchange="handlePhotoFiles(this)">
                     </div>
 
                     <!-- Preview Gallery -->
@@ -355,7 +368,7 @@
     </div>
 
     <!-- PWA Install Prompt Logic could go here -->
-    <script src="app.js?v=81"></script>
+    <script src="app.js?v=82"></script>
     <script>
         // Register Service Worker if we wanted offline support, but for now simple manifest is enough for "Add to Home Screen"
     </script>

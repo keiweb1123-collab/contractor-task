@@ -1081,19 +1081,30 @@ function stopCamera() {
 
 function capturePhoto() {
     const video = document.getElementById("camera-stream");
-    const canvas = document.getElementById("camera-canvas");
     if (!cameraStream) return;
+    // Live camera frames get the subtle camera filter; everything else
+    // (sizing, watermark, compression, saving) is shared with the file path.
+    renderAndSavePhoto(video, video.videoWidth, video.videoHeight, true);
+    closeCameraOverlay();
+}
 
-    // Cap captures at 1024 px wide. On a phone screen (typically 3–4× DPR
+// Shared image pipeline for BOTH the camera capture and the
+// "choose from gallery/file" path. Draws the source (a live <video> frame or a
+// decoded <img>) onto the work canvas, downscales it, applies the exact same
+// watermark (date / unit / optional floor) and saves a compressed JPEG. Routing
+// both inputs through one function guarantees file-picked photos are
+// watermarked, sized and stored identically to captured ones.
+function renderAndSavePhoto(source, srcW, srcH, applyCameraFilter) {
+    const canvas = document.getElementById("camera-canvas");
+    if (!srcW || !srcH) return;
+
+    // Cap output at 1024 px wide. On a phone screen (typically 3–4× DPR
     // for the relevant viewport), 1024 px is indistinguishable from 1280 px,
     // but the file is ~40 % smaller, which is what keeps many-photo shares
     // under the practical Web Share API payload limit on Android Chrome PWA.
     const maxWidth = 1024;
-    let w = video.videoWidth;
-    let h = video.videoHeight;
-
-    let targetW = w;
-    let targetH = h;
+    let targetW = srcW;
+    let targetH = srcH;
 
     if (targetW > maxWidth) {
         const scale = maxWidth / targetW;
@@ -1106,9 +1117,9 @@ function capturePhoto() {
     const ctx = canvas.getContext("2d");
 
     ctx.save();
-    ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
+    if (applyCameraFilter) ctx.filter = "contrast(1.005) saturate(1.01) brightness(1.002)";
 
-    ctx.drawImage(video, 0, 0, targetW, targetH);
+    ctx.drawImage(source, 0, 0, targetW, targetH);
 
     ctx.restore();
     ctx.filter = "none";
@@ -1120,7 +1131,41 @@ function capturePhoto() {
     // Compress more to ensure sharing many photos at once doesn't crash the OS intent
     const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
     savePhoto(dataUrl);
-    closeCameraOverlay();
+}
+
+// "Gallery" button → open the OS file/gallery picker. The hidden
+// <input type=file> change handler (handlePhotoFiles) does the actual work.
+function openPhotoFilePicker() {
+    if (!selectedUnit) return;
+    const input = document.getElementById("photo-file-input");
+    if (input) input.click();
+}
+
+// Handle one or more images chosen from the gallery / file system. Each is
+// decoded into an <img> and pushed through renderAndSavePhoto — the same
+// pipeline as a camera shot — so the date/unit/floor watermark is applied
+// identically. Selecting multiple images at once is supported.
+function handlePhotoFiles(input) {
+    const files = Array.from(input.files || []);
+    // Clear the value immediately so re-picking the SAME file still fires
+    // `change` (browsers suppress it otherwise).
+    input.value = "";
+    if (!files.length || !selectedUnit) return;
+
+    files.forEach(file => {
+        if (!file.type || !file.type.startsWith("image/")) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                renderAndSavePhoto(img, img.naturalWidth, img.naturalHeight, false);
+            };
+            img.onerror = () => console.warn("Could not decode selected image:", file.name);
+            img.src = e.target.result;
+        };
+        reader.onerror = () => console.warn("Could not read selected file:", file.name);
+        reader.readAsDataURL(file);
+    });
 }
 
 function addWatermark(ctx, canvas, unitText, floorText) {
@@ -1994,8 +2039,9 @@ function chunkUnitsForShare(contractor, unitBreakdown) {
         // sub-chunk. Each sub-chunk's text shows the tasks for ONLY the
         // units whose photos appear in that chunk for the first time,
         // honoring the user's rule:
-        //   "1回目ならタスク、2回目ならタスクは書かなくていいが、
-        //    次のユニットの画像があるならそのタスクはかけ"
+        //   "On the first occurrence, include the tasks; on the second you
+        //    don't need to repeat them — but if the next unit's photos appear,
+        //    do write that unit's tasks."
         // Tasks-only units (no photos) are flushed into the first chunk.
         const totalParts = Math.ceil(items.length / MAX_FILES_PER_SHARE);
         const tasksShown = new Set();
@@ -2209,7 +2255,7 @@ function renderShareDiag() {
 
         let braveNote = '';
         if (info.env && info.env.isBrave) {
-            braveNote = 'Brave detected: Shields はファイル共有をブロックします。アドレスバーのライオン🦁 → Shields を「Down」にしてリロードしてください。';
+            braveNote = 'Brave detected: Shields blocks file sharing. Tap the lion icon 🦁 in the address bar → set Shields to "Down", then reload.';
         }
 
         // Rebuild the diagnostic block from scratch.
@@ -2244,7 +2290,7 @@ function renderShareDiag() {
         const actionRow = document.createElement('div');
         actionRow.style.marginTop = '6px';
         const copyBtn = document.createElement('button');
-        copyBtn.textContent = '📋 診断をコピー';
+        copyBtn.textContent = '📋 Copy diagnostics';
         copyBtn.style.cssText = 'background:#f3f4f6; color:#374151; border:1px solid #d1d5db; padding:6px 12px; border-radius:6px; font-size:0.7rem; cursor:pointer;';
         copyBtn.addEventListener('click', function () {
             const full = `${line1}\n${braveNote ? braveNote + '\n' : ''}${line2}`;
