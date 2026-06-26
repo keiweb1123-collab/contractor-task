@@ -51,6 +51,10 @@ let _pinchStartDist = 0, _pinchStartZoom = 1;
 let _camZoomListenersBound = false;
 let yesterdayReport = null; // { date, data } — text-only snapshot
 let overtimeData = {};  // { "IADECCO": "◯"|"×", "YAMATO": "◯"|"×", "INTI INDAH": "◯"|"×" }
+// The calendar day that currentReport's data belongs to. Saves are stamped with
+// THIS day (not the wall-clock at save time), so a save that fires after midnight
+// can't relabel yesterday's data as today's. Set on every load/rollover.
+let currentReportDate = null;
 
 // Cache: photoId → { url, blob }. Each saved image gets exactly one Object URL
 // for its entire lifetime, so re-renders don't re-fetch from IndexedDB and
@@ -1617,7 +1621,11 @@ async function saveLocalData() {
         const todayKey = getDateKey();
         const payload = {
             id: STORAGE_KEY,
-            today: { date: todayKey, data: currentReport },
+            // Stamp with the day the data BELONGS to, not the wall-clock now. This
+            // is the core fix: if a save fires after midnight (background-resume /
+            // bfcache) while currentReport still holds yesterday's data, it stays
+            // labelled as yesterday — so the next load correctly rolls it over.
+            today: { date: currentReportDate || todayKey, data: currentReport },
             yesterday: yesterdayReport,
             overtime: overtimeData
         };
@@ -1641,6 +1649,7 @@ async function loadLocalData() {
         if (!result) {
             currentReport = {};
             yesterdayReport = null;
+            currentReportDate = todayKey;
             return;
         }
 
@@ -1655,6 +1664,7 @@ async function loadLocalData() {
                 currentReport = {};
                 await clearAllStoredImages();
             }
+            currentReportDate = todayKey;
             await saveLocalData();
             return;
         }
@@ -1667,17 +1677,20 @@ async function loadLocalData() {
             currentReport = todayRec.data || {};
             yesterdayReport = yRec;
             overtimeData = result.overtime || {};
+            currentReportDate = todayRec.date;
         } else if (todayRec && todayRec.date && todayRec.date !== todayKey) {
             // Day rolled over — promote today's text to yesterday, drop photos, start fresh today
             yesterdayReport = { date: todayRec.date, data: stripPhotos(todayRec.data) };
             currentReport = {};
             overtimeData = {};
+            currentReportDate = todayKey;
             await clearAllStoredImages();
             await saveLocalData();
         } else {
             currentReport = {};
             yesterdayReport = yRec;
             overtimeData = result.overtime || {};
+            currentReportDate = todayKey;
             // currentReport was discarded but a malformed/older payload may have
             // left image blobs in IMG_STORE that no db_ref now references. Reclaim
             // them so they don't permanently consume IndexedDB quota.
@@ -1774,9 +1787,38 @@ function migrateNestedTasks(report) {
     return migrated;
 }
 
+// Roll over to a new calendar day WITHOUT a cold start. Mobile PWAs frequently
+// resume from the background (or bfcache) without firing DOMContentLoaded — so
+// loadLocalData (the only other rollover trigger) never runs, yet the app keeps
+// showing yesterday's report. We re-check the day whenever the app becomes
+// visible/focused and promote the report if midnight has passed.
+async function maybeRolloverForNewDay() {
+    try {
+        const todayKey = getDateKey();
+        if (!currentReportDate) { currentReportDate = todayKey; return; }
+        if (currentReportDate === todayKey) return;   // same day — nothing to do
+        if (selectedUnit) return;                     // don't disrupt an open editor; retry next time
+        // Midnight passed while the app was alive → promote today's report to
+        // yesterday (text only) and start a fresh today, mirroring loadLocalData.
+        yesterdayReport = { date: currentReportDate, data: stripPhotos(currentReport) };
+        currentReport = {};
+        overtimeData = {};
+        currentReportDate = todayKey;
+        clearPhotoUrlCache();
+        await clearAllStoredImages();
+        await saveLocalData();
+        renderAllReports();
+    } catch (e) { console.error("rollover check failed:", e); }
+}
+
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") { if (selectedUnit) syncCurrentUnitData(); saveLocalData(); }
+    else { maybeRolloverForNewDay(); }   // became visible again — re-check the day
 });
+// Covers PWA resume-from-background and bfcache restore, where DOMContentLoaded
+// does NOT fire but the user expects a fresh day.
+window.addEventListener("pageshow", () => { maybeRolloverForNewDay(); });
+window.addEventListener("focus", () => { maybeRolloverForNewDay(); });
 window.addEventListener("beforeunload", () => {
     if (selectedUnit) syncCurrentUnitData();
     // Best-effort save before unload. IndexedDB transactions started here are
